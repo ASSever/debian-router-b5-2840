@@ -43,7 +43,7 @@ tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
 gzip -n "$stage/$package.tar"
 (cd "$stage" && sha256sum "$package.tar.gz" > "$package.tar.gz.sha256")
 rm -r -- "$stage/$package"
-mv -- "$stage" "$output_dir/$version"
+mv -T -- "$stage" "$output_dir/$version"
 trap - EXIT HUP INT TERM
 printf 'Package: %s\n' "$output_dir/$version/$package.tar.gz"
 printf 'SHA-256: %s\n' "$output_dir/$version/$package.tar.gz.sha256"
