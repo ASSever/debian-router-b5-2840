@@ -10,3 +10,4 @@
 /*.iso
 /debian-*-SHA256SUMS
 /local-reports/
+/dist/
