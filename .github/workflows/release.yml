@@ -1,0 +1,39 @@
+name: Publish release
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+      - name: Test
+        working-directory: backend
+        run: go test ./...
+      - name: Name the release
+        id: version
+        shell: bash
+        run: echo "value=0.1.0-step06-$(TZ=Europe/Moscow date +%Y%m%d-%H%M)-r${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+      - name: Build and verify the package
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          sh scripts/package.sh "$VERSION"
+          cd "dist/$VERSION"
+          sha256sum -c "debian-router-b5-2840-$VERSION.tar.gz.sha256"
+          tar -tzf "debian-router-b5-2840-$VERSION.tar.gz"
+      - name: Publish assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          mkdir release
+          cp "dist/$VERSION/debian-router-b5-2840-$VERSION.tar.gz" release/router-api-linux-amd64.tar.gz
+          (cd release && sha256sum router-api-linux-amd64.tar.gz > router-api-linux-amd64.tar.gz.sha256)
+          gh release create "v$VERSION" release/router-api-linux-amd64.tar.gz release/router-api-linux-amd64.tar.gz.sha256 --target "$GITHUB_SHA" --title "Stage 06 $VERSION" --notes "Verified linux/amd64 package from commit $GITHUB_SHA. Service installation follows in stage 07." --latest

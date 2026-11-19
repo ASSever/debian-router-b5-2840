@@ -4,15 +4,26 @@ set -eu
 export LC_ALL=C
 
 usage() {
-    printf '%s\n' 'Usage: sh install.sh [--check | --help]' \
-        'Stage 01: inspect Debian 13 amd64. Prints a local report; requires no root access.'
+    printf '%s\n' 'Usage: sh install.sh [--check | --fetch-version VERSION | --help]' \
+        'Check Debian 13 amd64, or download and verify a GitHub release package.'
 }
 
 case "$#:${1-}" in
     0:|1:--check) ;;
     1:--help) usage; exit 0 ;;
+    2:--fetch-version) ;;
     *) usage >&2; exit 2 ;;
 esac
+
+if [ "${1-}" = --fetch-version ]; then
+    release_version=$2
+    if [ "$release_version" != latest ] && \
+        ! printf '%s\n' "$release_version" | grep -Eq \
+            '^[0-9]+\.[0-9]+\.[0-9]+-step[0-9]{2}-[0-9]{8}-[0-9]{4}-r[0-9]+$'; then
+        echo 'Invalid release version.' >&2
+        exit 2
+    fi
+fi
 
 if [ "$(uname -s)" != Linux ] || [ ! -r /etc/os-release ]; then
     echo 'Unsupported platform: Debian 13 amd64 required.' >&2
@@ -24,6 +35,53 @@ if [ "${ID-}/${VERSION_ID-}/$architecture" != debian/13/amd64 ]; then
     printf 'Unsupported platform: %s %s (%s). Debian 13 amd64 required.\n' \
         "${ID-unknown}" "${VERSION_ID-unknown}" "$architecture" >&2
     exit 3
+fi
+
+if [ "${1-}" = --fetch-version ]; then
+    for tool in /usr/lib/apt/apt-helper sha256sum tar mktemp; do
+        if [ ! -x "$tool" ] && ! command -v "$tool" >/dev/null 2>&1; then
+            printf 'Required tool is missing: %s\n' "$tool" >&2
+            exit 4
+        fi
+    done
+    if [ "$release_version" = latest ]; then
+        release_path=latest/download
+    else
+        release_path=download/v$release_version
+    fi
+    release_url=https://github.com/ASSever/debian-router-b5-2840/releases/$release_path
+    archive=router-api-linux-amd64.tar.gz
+    checksum=$archive.sha256
+    stage=$(mktemp -d)
+    trap 'rm -r -- "$stage"' EXIT HUP INT TERM
+    /usr/lib/apt/apt-helper download-file "$release_url/$checksum" "$stage/$checksum"
+    /usr/lib/apt/apt-helper download-file "$release_url/$archive" "$stage/$archive"
+    if ! grep -Eq "^[0-9a-f]{64}  $archive\$" "$stage/$checksum" ||
+        [ "$(wc -l < "$stage/$checksum")" -ne 1 ]; then
+        echo 'Invalid release checksum file.' >&2
+        exit 5
+    fi
+    (cd "$stage" && sha256sum -c "$checksum") || {
+        echo 'Release checksum mismatch.' >&2
+        exit 5
+    }
+    tar -tzf "$stage/$archive" >/dev/null || {
+        echo 'Invalid release archive.' >&2
+        exit 5
+    }
+    package_version=$(tar -xOzf "$stage/$archive" --wildcards 'debian-router-b5-2840-*/VERSION') || {
+        echo 'Release version is missing from archive.' >&2
+        exit 5
+    }
+    if ! printf '%s\n' "$package_version" | grep -Eq \
+        '^[0-9]+\.[0-9]+\.[0-9]+-step[0-9]{2}-[0-9]{8}-[0-9]{4}-r[0-9]+$' ||
+        { [ "$release_version" != latest ] && [ "$package_version" != "$release_version" ]; }; then
+        echo 'Release version does not match the requested package.' >&2
+        exit 5
+    fi
+    printf 'Verified release package: %s\n' "$package_version"
+    printf '%s\n' 'Package verification finished. Service installation is the next stage.'
+    exit 0
 fi
 
 section() { printf '\n[%s]\n' "$1"; }

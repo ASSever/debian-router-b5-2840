@@ -15,6 +15,7 @@ expect_exit() {
 }
 expect_exit 2 sh install.sh --invalid
 expect_exit 2 sh install.sh --check extra
+expect_exit 2 sh install.sh --fetch-version ../invalid
 
 if [ "$(uname -s)" = Linux ] && [ -r /etc/os-release ]; then
     . /etc/os-release

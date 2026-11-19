@@ -8,8 +8,8 @@ if [ "$#" -ne 1 ]; then
 fi
 
 version=$1
-if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-    echo 'Version must have the form MAJOR.MINOR.PATCH.' >&2
+if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-step[0-9]{2}-[0-9]{8}-[0-9]{4}-r[0-9]+)?$'; then
+    echo 'Version must be MAJOR.MINOR.PATCH with an optional step and timestamp suffix.' >&2
     exit 2
 fi
 
