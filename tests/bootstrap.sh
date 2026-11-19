@@ -16,22 +16,19 @@ expect_exit() {
 expect_exit 2 sh install.sh --invalid
 expect_exit 2 sh install.sh --check extra
 expect_exit 2 sh install.sh --fetch-version ../invalid
+expect_exit 2 sh install.sh --install-version ../invalid
 
 if [ "$(uname -s)" = Linux ] && [ -r /etc/os-release ]; then
     . /etc/os-release
 fi
 arch=$(dpkg --print-architecture 2>/dev/null || echo unknown)
 if [ "${ID-}/${VERSION_ID-}/$arch" = debian/13/amd64 ]; then
-    for mode in default explicit; do
-        case "$mode" in
-            default) report=$(sh install.sh) ;;
-            explicit) report=$(sh install.sh --check) ;;
-        esac
-        for marker in '[Platform]' '[Storage]' '[Interfaces]' '[SSH management path]' \
-            '[Services]' '[Package candidates (local APT cache)]' '[Time]' 'Stage 01 inventory finished.'; do
-            printf '%s\n' "$report" | grep -F -- "$marker" >/dev/null
-        done
+    report=$(sh install.sh --check)
+    for marker in '[Platform]' '[Storage]' '[Interfaces]' '[SSH management path]' \
+        '[Services]' '[Package candidates (local APT cache)]' '[Time]' 'Stage 01 inventory finished.'; do
+        printf '%s\n' "$report" | grep -F -- "$marker" >/dev/null
     done
+    expect_exit 4 sh install.sh
 else
     expect_exit 3 sh install.sh
 fi

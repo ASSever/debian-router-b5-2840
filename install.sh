@@ -4,19 +4,24 @@ set -eu
 export LC_ALL=C
 
 usage() {
-    printf '%s\n' 'Usage: sh install.sh [--check | --fetch-version VERSION | --help]' \
-        'Check Debian 13 amd64, or download and verify a GitHub release package.'
+    printf '%s\n' 'Usage: sh install.sh [--check | --fetch-version VERSION | --install-version VERSION | --help]' \
+        'Install the latest verified API release, or select a release explicitly.'
 }
 
 case "$#:${1-}" in
     0:|1:--check) ;;
     1:--help) usage; exit 0 ;;
-    2:--fetch-version) ;;
+    2:--fetch-version|2:--install-version) ;;
     *) usage >&2; exit 2 ;;
 esac
 
-if [ "${1-}" = --fetch-version ]; then
+mode=${1---install}
+if [ "$mode" = --fetch-version ] || [ "$mode" = --install-version ]; then
     release_version=$2
+else
+    release_version=latest
+fi
+if [ "$mode" != --check ]; then
     if [ "$release_version" != latest ] && \
         ! printf '%s\n' "$release_version" | grep -Eq \
             '^[0-9]+\.[0-9]+\.[0-9]+-step[0-9]{2}-[0-9]{8}-[0-9]{4}-r[0-9]+$'; then
@@ -37,7 +42,11 @@ if [ "${ID-}/${VERSION_ID-}/$architecture" != debian/13/amd64 ]; then
     exit 3
 fi
 
-if [ "${1-}" = --fetch-version ]; then
+if [ "$mode" != --check ]; then
+    if [ "$mode" != --fetch-version ] && [ "$(id -u)" -ne 0 ]; then
+        echo 'Run the installation as root: sudo sh ./install.sh' >&2
+        exit 4
+    fi
     for tool in /usr/lib/apt/apt-helper sha256sum tar mktemp; do
         if [ ! -x "$tool" ] && ! command -v "$tool" >/dev/null 2>&1; then
             printf 'Required tool is missing: %s\n' "$tool" >&2
@@ -53,7 +62,14 @@ if [ "${1-}" = --fetch-version ]; then
     archive=router-api-linux-amd64.tar.gz
     checksum=$archive.sha256
     stage=$(mktemp -d)
-    trap 'rm -r -- "$stage"' EXIT HUP INT TERM
+    cleanup() {
+        rm -r -- "$stage"
+        if [ -n "${release_tmp-}" ] && [ -d "$release_tmp" ]; then
+            rm -r -- "$release_tmp"
+        fi
+    }
+    trap cleanup EXIT
+    trap 'exit 1' HUP INT TERM
     /usr/lib/apt/apt-helper download-file "$release_url/$checksum" "$stage/$checksum"
     /usr/lib/apt/apt-helper download-file "$release_url/$archive" "$stage/$archive"
     if ! grep -Eq "^[0-9a-f]{64}  $archive\$" "$stage/$checksum" ||
@@ -80,7 +96,80 @@ if [ "${1-}" = --fetch-version ]; then
         exit 5
     fi
     printf 'Verified release package: %s\n' "$package_version"
-    printf '%s\n' 'Package verification finished. Service installation is the next stage.'
+    if [ "$mode" = --fetch-version ]; then
+        printf '%s\n' 'Package verification finished.'
+        exit 0
+    fi
+
+    package=debian-router-b5-2840-$package_version
+    expected_listing=$(printf '%s\n' "$package/" "$package/VERSION" "$package/router-api")
+    if [ "$(tar -tzf "$stage/$archive")" != "$expected_listing" ]; then
+        echo 'Unexpected release archive contents.' >&2
+        exit 5
+    fi
+    tar -xzf "$stage/$archive" -C "$stage" --no-same-owner --no-same-permissions
+    if [ ! -f "$stage/$package/router-api" ] || [ -L "$stage/$package/router-api" ] ||
+        [ ! -f "$stage/$package/VERSION" ] || [ -L "$stage/$package/VERSION" ] ||
+        [ "$(cat "$stage/$package/VERSION")" != "$package_version" ]; then
+        echo 'Invalid release payload.' >&2
+        exit 5
+    fi
+
+    prefix=/opt/debian-router-b5-2840
+    release_dir=$prefix/releases/$package_version
+    service=/etc/systemd/system/debian-router-api.service
+    mkdir -p "$prefix/releases"
+    if [ -L "$prefix/current" ] &&
+        [ "$(readlink "$prefix/current")" != "$release_dir" ]; then
+        echo 'Another release is installed. Updating it is available in the next stage.' >&2
+        exit 6
+    fi
+    if [ -e "$release_dir" ]; then
+        if [ -L "$release_dir" ] || [ ! -f "$release_dir/router-api" ] ||
+            ! cmp -s "$stage/$package/router-api" "$release_dir/router-api"; then
+            echo 'Installed version differs from verified release.' >&2
+            exit 6
+        fi
+    else
+        release_tmp=$prefix/releases/.new-$package_version-$$
+        mkdir "$release_tmp"
+        install -m 0755 "$stage/$package/router-api" "$release_tmp/router-api"
+        printf '%s\n' "$package_version" > "$release_tmp/VERSION"
+        mv -Tf "$release_tmp" "$release_dir"
+        release_tmp=
+    fi
+
+    unit_tmp=$stage/debian-router-api.service
+    cat > "$unit_tmp" <<'EOF'
+[Unit]
+Description=Debian Router API
+After=network.target
+
+[Service]
+Type=simple
+User=nobody
+Group=nogroup
+ExecStart=/opt/debian-router-b5-2840/current/router-api
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    if [ ! -f "$service" ] || ! cmp -s "$unit_tmp" "$service"; then
+        install -m 0644 "$unit_tmp" "$service"
+        systemctl daemon-reload
+    fi
+    ln -s "$release_dir" "$prefix/current.new.$$"
+    mv -Tf "$prefix/current.new.$$" "$prefix/current"
+    systemctl enable --now debian-router-api.service
+    systemctl is-active --quiet debian-router-api.service
+    printf 'Installed API release: %s\n' "$package_version"
+    printf '%s\n' 'Local health endpoint: http://127.0.0.1:8081/healthz'
     exit 0
 fi
 

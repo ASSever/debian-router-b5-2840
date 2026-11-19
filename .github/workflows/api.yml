@@ -16,7 +16,7 @@ jobs:
       - name: Name the package
         id: version
         shell: bash
-        run: echo "value=0.1.0-step06-$(TZ=Europe/Moscow date +%Y%m%d-%H%M)-r${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+        run: echo "value=0.1.0-step07-$(TZ=Europe/Moscow date +%Y%m%d-%H%M)-r${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
       - name: Build and verify the release package
         env:
           VERSION: ${{ steps.version.outputs.value }}
