@@ -119,13 +119,21 @@ if [ "$mode" != --check ]; then
     release_dir=$prefix/releases/$package_version
     service=/etc/systemd/system/debian-router-api.service
     mkdir -p "$prefix/releases"
-    if [ -L "$prefix/current" ] &&
-        [ "$(readlink "$prefix/current")" != "$release_dir" ]; then
-        echo 'Another release is installed. Updating it is not yet supported.' >&2
+    previous_release=
+    if [ -L "$prefix/current" ]; then
+        previous_release=$(readlink "$prefix/current")
+        if [ ! -x "$previous_release/router-api" ]; then
+            echo 'The current release is missing its API binary.' >&2
+            exit 6
+        fi
+    elif [ -e "$prefix/current" ]; then
+        echo 'The current release path is not a symbolic link.' >&2
         exit 6
     fi
     if [ -e "$release_dir" ]; then
         if [ -L "$release_dir" ] || [ ! -f "$release_dir/router-api" ] ||
+            [ ! -f "$release_dir/VERSION" ] ||
+            [ "$(cat "$release_dir/VERSION")" != "$package_version" ] ||
             ! cmp -s "$stage/$package/router-api" "$release_dir/router-api"; then
             echo 'Installed version differs from verified release.' >&2
             exit 6
@@ -161,12 +169,48 @@ PrivateTmp=yes
 WantedBy=multi-user.target
 EOF
     if [ ! -f "$service" ] || ! cmp -s "$unit_tmp" "$service"; then
-        install -m 0644 "$unit_tmp" "$service"
+        unit_changed=yes
+        if [ -f "$service" ]; then
+            cp -p "$service" "$stage/previous.service"
+        fi
+        install -m 0644 "$unit_tmp" "$service.new.$$"
+        mv -Tf "$service.new.$$" "$service"
         systemctl daemon-reload
+    else
+        unit_changed=no
     fi
-    ln -s "$release_dir" "$prefix/current.new.$$"
-    mv -Tf "$prefix/current.new.$$" "$prefix/current"
-    systemctl enable --now debian-router-api.service
+    if [ "$previous_release" != "$release_dir" ]; then
+        ln -s "$release_dir" "$prefix/current.new.$$"
+        mv -Tf "$prefix/current.new.$$" "$prefix/current"
+    fi
+    systemctl enable debian-router-api.service
+    if [ "$previous_release" = "$release_dir" ] && [ "$unit_changed" = no ]; then
+        systemctl start debian-router-api.service
+    elif ! systemctl restart debian-router-api.service ||
+        { sleep 1; ! systemctl is-active --quiet debian-router-api.service; }; then
+        if [ -n "$previous_release" ]; then
+            ln -s "$previous_release" "$prefix/current.rollback.$$"
+            mv -Tf "$prefix/current.rollback.$$" "$prefix/current"
+        else
+            rm -f -- "$prefix/current"
+        fi
+        if [ "$unit_changed" = yes ]; then
+            if [ -f "$stage/previous.service" ]; then
+                cp -p "$stage/previous.service" "$service.new.$$"
+                mv -Tf "$service.new.$$" "$service"
+            else
+                rm -f -- "$service"
+            fi
+            systemctl daemon-reload
+        fi
+        if [ -n "$previous_release" ]; then
+            systemctl restart debian-router-api.service || :
+        else
+            systemctl disable --now debian-router-api.service || :
+        fi
+        echo 'API startup failed; the previous release was restored.' >&2
+        exit 7
+    fi
     systemctl is-active --quiet debian-router-api.service
     printf 'Installed API release: %s\n' "$package_version"
     printf '%s\n' 'Local health endpoint: http://127.0.0.1:8081/healthz'
