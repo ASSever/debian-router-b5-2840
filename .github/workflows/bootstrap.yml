@@ -1,0 +1,13 @@
+name: Bootstrap
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check entry point on an unsupported Linux distribution
+        run: sh tests/bootstrap.sh
+      - name: Check entry point as an unprivileged user on minimal Debian 13
+        run: docker run --rm --user 65534:65534 --read-only --network none -v "$PWD:/project:ro" -w /project debian:13-slim sh tests/bootstrap.sh

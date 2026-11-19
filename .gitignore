@@ -1,0 +1,12 @@
+/.codegraph-tools/
+/.codegraph-win32-x64-*.download
+/.codegraph/
+/.codex/
+/AGENTS.md
+/codegraph.json
+/DEBIAN_ROUTER_B5-2840_CONTEXT.md
+/MINIPC_SETUP_LOG.txt
+/.ssh*
+/*.iso
+/debian-*-SHA256SUMS
+/local-reports/
