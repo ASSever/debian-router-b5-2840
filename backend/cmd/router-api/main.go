@@ -8,13 +8,26 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
+
+	"github.com/ASSever/debian-router-b5-2840/backend/internal/database"
 )
 
 const listenAddress = "127.0.0.1:8081"
 
 func main() {
+	dataDir := os.Getenv("STATE_DIRECTORY")
+	if dataDir == "" {
+		dataDir = "."
+	}
+	db, err := database.Open(filepath.Join(dataDir, "router.db"))
+	if err != nil {
+		log.Fatalf("open state database: %v", err)
+	}
+	defer db.Close()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", health)
 

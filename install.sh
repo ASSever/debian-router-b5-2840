@@ -155,8 +155,10 @@ After=network.target
 
 [Service]
 Type=simple
-User=nobody
-Group=nogroup
+DynamicUser=yes
+StateDirectory=debian-router-b5-2840
+StateDirectoryMode=0700
+UMask=0077
 ExecStart=/opt/debian-router-b5-2840/current/router-api
 Restart=on-failure
 RestartSec=2s
