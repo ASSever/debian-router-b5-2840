@@ -121,7 +121,7 @@ if [ "$mode" != --check ]; then
     mkdir -p "$prefix/releases"
     if [ -L "$prefix/current" ] &&
         [ "$(readlink "$prefix/current")" != "$release_dir" ]; then
-        echo 'Another release is installed. Updating it is available in the next stage.' >&2
+        echo 'Another release is installed. Updating it is not yet supported.' >&2
         exit 6
     fi
     if [ -e "$release_dir" ]; then
