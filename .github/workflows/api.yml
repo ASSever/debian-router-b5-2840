@@ -13,14 +13,20 @@ jobs:
       - name: Test
         working-directory: backend
         run: go test ./...
+      - name: Name the package
+        id: version
+        shell: bash
+        run: echo "value=0.1.0-step06-$(TZ=Europe/Moscow date +%Y%m%d-%H%M)-r${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
       - name: Build and verify the release package
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
         run: |
-          sh scripts/package.sh 0.1.0
-          cd dist/0.1.0
-          sha256sum -c debian-router-b5-2840-0.1.0.tar.gz.sha256
-          tar -tzf debian-router-b5-2840-0.1.0.tar.gz
+          sh scripts/package.sh "$VERSION"
+          cd "dist/$VERSION"
+          sha256sum -c "debian-router-b5-2840-$VERSION.tar.gz.sha256"
+          tar -tzf "debian-router-b5-2840-$VERSION.tar.gz"
       - uses: actions/upload-artifact@v4
         with:
-          name: debian-router-b5-2840-0.1.0-linux-amd64
-          path: dist/0.1.0/*
+          name: debian-router-b5-2840-${{ steps.version.outputs.value }}-linux-amd64
+          path: dist/${{ steps.version.outputs.value }}/*
           if-no-files-found: error
