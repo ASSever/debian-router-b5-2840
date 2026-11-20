@@ -18,9 +18,9 @@ func TestUIAssetsAreServedOverHTTPS(t *testing.T) {
 		t.Fatal(err)
 	}
 	files := map[string]string{
-		"index.html":       "<!doctype html><title>Router</title>",
-		"assets/app.js":    "console.log('ready')",
-		"assets/app.css":   "body { color: black; }",
+		"index.html":     "<!doctype html><title>Router</title>",
+		"assets/app.js":  "console.log('ready')",
+		"assets/app.css": "body { color: black; }",
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(uiDirectory, filepath.FromSlash(name)), []byte(content), 0600); err != nil {
@@ -31,9 +31,9 @@ func TestUIAssetsAreServedOverHTTPS(t *testing.T) {
 	defer server.Close()
 
 	for path, expected := range map[string]string{
-		"/":                 "<!doctype html>",
-		"/assets/app.js":    "console.log",
-		"/assets/app.css":   "body {",
+		"/":               "<!doctype html>",
+		"/assets/app.js":  "console.log",
+		"/assets/app.css": "body {",
 	} {
 		response, err := server.Client().Get(server.URL + path)
 		if err != nil {
