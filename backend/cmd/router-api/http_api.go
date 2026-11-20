@@ -8,6 +8,8 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -23,6 +25,10 @@ type api struct {
 }
 
 func newAPI(db *sql.DB) http.Handler {
+	return newAPIWithUI(db, os.Getenv("ROUTER_UI_DIR"))
+}
+
+func newAPIWithUI(db *sql.DB, uiDirectory string) http.Handler {
 	a := &api{db: db, now: time.Now}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", health)
@@ -30,7 +36,25 @@ func newAPI(db *sql.DB) http.Handler {
 	mux.HandleFunc("GET /api/auth/session", a.sessionStatus)
 	mux.HandleFunc("DELETE /api/auth/session", a.logout)
 	mux.HandleFunc("PUT /api/auth/password", a.changePassword)
+	ui := newUIHandler(uiDirectory)
+	mux.Handle("GET /{$}", ui)
+	mux.Handle("GET /assets/", ui)
 	return requireHTTPS(securityHeaders(mux))
+}
+
+func newUIHandler(directory string) http.Handler {
+	if directory == "" {
+		return http.NotFoundHandler()
+	}
+	files := http.FileServer(http.Dir(directory))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; connect-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+		if r.URL.Path == "/" {
+			http.ServeFile(w, r, filepath.Join(directory, "index.html"))
+			return
+		}
+		files.ServeHTTP(w, r)
+	})
 }
 
 func requireHTTPS(next http.Handler) http.Handler {
