@@ -132,7 +132,20 @@ case "$command_name" in
         /usr/bin/cmp -s "$dir/snapshot" "$dir/target" || fail 'fixture was not restored'
         timer_state=$(/usr/bin/systemctl --system show --property=ActiveState --value "$unit.timer" 2>/dev/null || :)
         [ "$timer_state" = inactive ] || fail "timer is not inactive after firing (state: ${timer_state:-unknown})"
-        printf 'ROLLBACK_FIXTURE=PASS id=%s service=%s timer=%s\n' "$id" "$result" "$timer_state"
+        protect_system=$(/usr/bin/systemctl --system show --property=ProtectSystem --value "$unit.service")
+        protect_home=$(/usr/bin/systemctl --system show --property=ProtectHome --value "$unit.service")
+        private_tmp=$(/usr/bin/systemctl --system show --property=PrivateTmp --value "$unit.service")
+        read_write_paths=$(/usr/bin/systemctl --system show --property=ReadWritePaths --value "$unit.service")
+        no_new_privileges=$(/usr/bin/systemctl --system show --property=NoNewPrivileges --value "$unit.service")
+        capability_bounding_set=$(/usr/bin/systemctl --system show --property=CapabilityBoundingSet --value "$unit.service")
+        address_families=$(/usr/bin/systemctl --system show --property=RestrictAddressFamilies --value "$unit.service")
+        service_user=$(/usr/bin/systemctl --system show --property=User --value "$unit.service")
+        [ "$protect_system" = strict ] || fail 'systemd service does not protect the filesystem'
+        [ "$protect_home" = yes ] && [ "$private_tmp" = yes ] || fail 'systemd service isolation is incomplete'
+        [ "$read_write_paths" = "$dir" ] || fail 'systemd service can write outside the fixture'
+        [ "$no_new_privileges" = yes ] && [ -z "$capability_bounding_set" ] || fail 'systemd service has unexpected privileges'
+        [ "$address_families" = AF_UNIX ] && [ "$service_user" = root ] || fail 'systemd service has unexpected execution restrictions'
+        printf 'ROLLBACK_FIXTURE=PASS id=%s service=%s timer=%s sandbox=PASS\n' "$id" "$result" "$timer_state"
         ;;
     cancel)
         validate_fixture "$id"

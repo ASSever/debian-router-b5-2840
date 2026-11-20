@@ -22,7 +22,7 @@ sudo sh /tmp/network-rollback-fixture.sh cleanup ID
 rm /tmp/network-rollback-fixture.sh
 ```
 
-`verify` требует совпадения SHA-256 снимка, восстановленного содержимого и `Result=success` у службы, а также завершённого состояния timer. Сценарий проверки отмены выполняется до истечения срока:
+`verify` требует совпадения SHA-256 снимка и восстановленного содержимого, `Result=success`, завершённого timer и фактического применения systemd-ограничений службы. Сценарий проверки отмены выполняется до истечения срока:
 
 ```sh
 id=$(sudo sh /tmp/network-rollback-fixture.sh arm 90)
