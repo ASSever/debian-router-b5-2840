@@ -2,6 +2,7 @@
 # Run from the checkout root with a POSIX shell.
 set -eu
 sh -n install.sh
+sh -n tests/network-rollback-fixture.sh
 sh install.sh --help | grep -F 'Usage: sh install.sh' >/dev/null
 expect_exit() {
     expected=$1
@@ -17,6 +18,9 @@ expect_exit 2 sh install.sh --invalid
 expect_exit 2 sh install.sh --check extra
 expect_exit 2 sh install.sh --fetch-version ../invalid
 expect_exit 2 sh install.sh --install-version ../invalid
+expect_exit 2 sh tests/network-rollback-fixture.sh
+expect_exit 2 sh tests/network-rollback-fixture.sh arm 1
+expect_exit 2 sh tests/network-rollback-fixture.sh verify ../escape
 
 if [ "$(uname -s)" = Linux ] && [ -r /etc/os-release ]; then
     . /etc/os-release
