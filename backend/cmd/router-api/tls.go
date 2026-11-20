@@ -114,7 +114,7 @@ func createLocalCertificate(stateDir, tlsDir string) error {
 		Subject:      pkix.Name{CommonName: "localhost"},
 		NotBefore:    now.Add(-5 * time.Minute),
 		NotAfter:     now.AddDate(10, 0, 0),
-		IsCA:         true,
+		IsCA:                  true,
 		BasicConstraintsValid: true,
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
