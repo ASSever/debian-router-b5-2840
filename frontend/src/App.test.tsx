@@ -11,6 +11,14 @@ function healthResponse(healthy: boolean): Response {
   } as Response;
 }
 
+function anonymousSessionResponse(): Response {
+  return {
+    ok: false,
+    status: 401,
+    json: async () => ({ error: "unauthorized" }),
+  } as Response;
+}
+
 function interfaceResponse(): Response {
   return {
     ok: true,
@@ -71,6 +79,9 @@ describe("router API health indicator", () => {
   it("updates from reachable to unreachable and back", async () => {
     const healthResults = [true, false, true];
     fetchMock.mockImplementation((input) => {
+      if (input === "/api/auth/session") {
+        return Promise.resolve(anonymousSessionResponse());
+      }
       if (input === "/api/network/interfaces") {
         return Promise.resolve(interfaceResponse());
       }
@@ -99,9 +110,11 @@ describe("router API health indicator", () => {
   it("shows live port details and accepts only distinct WAN and LAN interfaces", async () => {
     fetchMock.mockImplementation((input) =>
       Promise.resolve(
-        input === "/api/network/interfaces"
-          ? interfaceResponse()
-          : healthResponse(true),
+        input === "/api/auth/session"
+          ? anonymousSessionResponse()
+          : input === "/api/network/interfaces"
+            ? interfaceResponse()
+            : healthResponse(true),
       ),
     );
 
@@ -140,6 +153,9 @@ describe("router API health indicator", () => {
   it("shows a WAN DHCP lease and refreshes after link recovery", async () => {
     const leaseStates: Array<"leased" | "link_down"> = ["link_down", "leased"];
     fetchMock.mockImplementation((input) => {
+      if (input === "/api/auth/session") {
+        return Promise.resolve(anonymousSessionResponse());
+      }
       if (input === "/api/network/interfaces") {
         return Promise.resolve(interfaceResponse());
       }

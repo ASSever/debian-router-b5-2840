@@ -23,4 +23,4 @@ Example:
 }
 ```
 
-The Network Setup panel shows the live inventory and lets the operator confirm WAN and LAN roles only when both selections name different interfaces. This confirmation stays in browser memory. It does not save or apply a network configuration; interface changes, routing, DHCP, DNS, firewall, and rollback remain later roadmap work.
+The Network Setup panel shows the live inventory and lets the operator confirm WAN and LAN roles only when both selections name different interfaces. This confirmation stays in browser memory. It does not save or apply a network configuration. Separate WAN panels show DHCP status and manage a temporary Static IPv4 profile on `enp1s0`; persistent port-role storage, LAN, DHCP server, DNS, and firewall configuration remain later roadmap work.

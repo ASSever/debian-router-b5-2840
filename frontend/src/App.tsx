@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
+import StaticWANPanel from "./StaticWANPanel";
+
 const CHECK_INTERVAL_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 4_000;
 const NETWORK_REQUEST_TIMEOUT_MS = 4_000;
@@ -244,6 +246,8 @@ export default function App() {
         </section>
 
         <NetworkPortWizard />
+
+        <StaticWANPanel />
 
         <p className="polling-note">
           Status refreshes automatically every {CHECK_INTERVAL_MS / 1_000}{" "}
