@@ -15,13 +15,15 @@ import (
 
 	"github.com/ASSever/debian-router-b5-2840/backend/internal/admin"
 	"github.com/ASSever/debian-router-b5-2840/backend/internal/authsession"
+	networkinventory "github.com/ASSever/debian-router-b5-2840/backend/internal/network"
 )
 
 const sessionCookieName = "__Host-router_session"
 
 type api struct {
-	db  *sql.DB
-	now func() time.Time
+	db                    *sql.DB
+	now                   func() time.Time
+	readNetworkInterfaces func() ([]networkinventory.Interface, error)
 }
 
 func newAPI(db *sql.DB) http.Handler {
@@ -29,9 +31,18 @@ func newAPI(db *sql.DB) http.Handler {
 }
 
 func newAPIWithUI(db *sql.DB, uiDirectory string) http.Handler {
-	a := &api{db: db, now: time.Now}
+	return newAPIWithInterfaceReader(db, uiDirectory, networkinventory.ReadInterfaces)
+}
+
+func newAPIWithInterfaceReader(
+	db *sql.DB,
+	uiDirectory string,
+	readNetworkInterfaces func() ([]networkinventory.Interface, error),
+) http.Handler {
+	a := &api{db: db, now: time.Now, readNetworkInterfaces: readNetworkInterfaces}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", health)
+	mux.HandleFunc("GET /api/network/interfaces", a.networkInterfaces)
 	mux.HandleFunc("POST /api/auth/login", a.login)
 	mux.HandleFunc("GET /api/auth/session", a.sessionStatus)
 	mux.HandleFunc("DELETE /api/auth/session", a.logout)
@@ -40,6 +51,18 @@ func newAPIWithUI(db *sql.DB, uiDirectory string) http.Handler {
 	mux.Handle("GET /{$}", ui)
 	mux.Handle("GET /assets/", ui)
 	return requireHTTPS(securityHeaders(mux))
+}
+
+func (a *api) networkInterfaces(w http.ResponseWriter, _ *http.Request) {
+	interfaces, err := a.readNetworkInterfaces()
+	if err != nil {
+		log.Printf("read network interfaces: %v", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "network_interfaces_unavailable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Interfaces []networkinventory.Interface `json:"interfaces"`
+	}{Interfaces: interfaces})
 }
 
 func newUIHandler(directory string) http.Handler {
