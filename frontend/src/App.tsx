@@ -13,6 +13,15 @@ type NetworkInterface = {
 
 type NetworkInterfaceResponse = { interfaces: NetworkInterface[] };
 
+type NetworkDHCPStatus = {
+  interface: string;
+  link_state: string;
+  lease_state: "leased" | "link_down" | "waiting";
+  addresses: string[];
+  gateway: string;
+  dns: string[];
+};
+
 type HealthState =
   | { status: "checking"; checkedAt: null }
   | { status: "online"; checkedAt: Date }
@@ -55,6 +64,30 @@ function isNetworkInterfaceResponse(
     "interfaces" in value &&
     Array.isArray(value.interfaces) &&
     value.interfaces.every(isNetworkInterface)
+  );
+}
+
+function isNetworkDHCPStatus(value: unknown): value is NetworkDHCPStatus {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  return (
+    "interface" in value &&
+    typeof value.interface === "string" &&
+    "link_state" in value &&
+    typeof value.link_state === "string" &&
+    "lease_state" in value &&
+    (value.lease_state === "leased" ||
+      value.lease_state === "link_down" ||
+      value.lease_state === "waiting") &&
+    "addresses" in value &&
+    Array.isArray(value.addresses) &&
+    value.addresses.every((address) => typeof address === "string") &&
+    "gateway" in value &&
+    typeof value.gateway === "string" &&
+    "dns" in value &&
+    Array.isArray(value.dns) &&
+    value.dns.every((server) => typeof server === "string")
   );
 }
 
@@ -233,6 +266,9 @@ function NetworkPortWizard() {
   const [wanInterface, setWanInterface] = useState("");
   const [lanInterface, setLanInterface] = useState("");
   const [selectionAccepted, setSelectionAccepted] = useState(false);
+  const [dhcpStatus, setDHCPStatus] = useState<NetworkDHCPStatus | null>(null);
+  const [dhcpLoading, setDHCPLoading] = useState(false);
+  const [dhcpError, setDHCPError] = useState(false);
 
   const refreshInterfaces = useCallback(async () => {
     const controller = new AbortController();
@@ -270,15 +306,55 @@ function NetworkPortWizard() {
           : "",
       );
       setSelectionAccepted(false);
+      setDHCPStatus(null);
+      setDHCPError(false);
     } catch {
       setLoadError(true);
       setInterfaces(null);
       setWanInterface("");
       setLanInterface("");
       setSelectionAccepted(false);
+      setDHCPStatus(null);
+      setDHCPError(false);
     } finally {
       window.clearTimeout(timeout);
       setIsLoading(false);
+    }
+  }, []);
+
+  const refreshDHCPStatus = useCallback(async (interfaceName: string) => {
+    setDHCPLoading(true);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(
+      () => controller.abort(),
+      NETWORK_REQUEST_TIMEOUT_MS,
+    );
+    try {
+      const response = await fetch(
+        "/api/network/dhcp?interface=" + encodeURIComponent(interfaceName),
+        {
+          method: "GET",
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+          signal: controller.signal,
+        },
+      );
+      const value: unknown = await response.json();
+      if (
+        !response.ok ||
+        !isNetworkDHCPStatus(value) ||
+        value.interface !== interfaceName
+      ) {
+        throw new Error("The API returned an unexpected DHCP response.");
+      }
+      setDHCPStatus(value);
+      setDHCPError(false);
+    } catch {
+      setDHCPStatus(null);
+      setDHCPError(true);
+    } finally {
+      window.clearTimeout(timeout);
+      setDHCPLoading(false);
     }
   }, []);
 
@@ -288,6 +364,24 @@ function NetworkPortWizard() {
     }, 0);
     return () => window.clearTimeout(timer);
   }, [refreshInterfaces]);
+
+  useEffect(() => {
+    if (!selectionAccepted || wanInterface === "") {
+      return;
+    }
+    const initialCheck = window.setTimeout(
+      () => void refreshDHCPStatus(wanInterface),
+      0,
+    );
+    const timer = window.setInterval(
+      () => void refreshDHCPStatus(wanInterface),
+      CHECK_INTERVAL_MS,
+    );
+    return () => {
+      window.clearTimeout(initialCheck);
+      window.clearInterval(timer);
+    };
+  }, [refreshDHCPStatus, selectionAccepted, wanInterface]);
 
   const selectedInterfacesAreDifferent =
     wanInterface !== "" &&
@@ -306,6 +400,8 @@ function NetworkPortWizard() {
   function updateWanInterface(value: string) {
     setWanInterface(value);
     setSelectionAccepted(false);
+    setDHCPStatus(null);
+    setDHCPError(false);
   }
 
   function updateLanInterface(value: string) {
@@ -439,9 +535,53 @@ function NetworkPortWizard() {
             </button>
           </div>
           {selectionAccepted && selectedInterfacesAreDifferent && (
-            <p className="port-feedback port-feedback--success" role="status">
-              Port selection accepted. Network settings have not been applied.
-            </p>
+            <>
+              <p className="port-feedback port-feedback--success" role="status">
+                Port selection accepted. Network settings have not been applied.
+              </p>
+              <section aria-labelledby="wan-dhcp-title">
+                <h3 id="wan-dhcp-title">WAN DHCP status</h3>
+                {dhcpLoading && dhcpStatus === null && (
+                  <p className="port-feedback" role="status">
+                    Reading the current WAN DHCP lease…
+                  </p>
+                )}
+                {dhcpError && (
+                  <p
+                    className="port-feedback port-feedback--error"
+                    role="alert"
+                  >
+                    WAN DHCP status is unavailable. Refresh to try again.
+                  </p>
+                )}
+                {dhcpStatus !== null && (
+                  <div aria-live="polite">
+                    <p>
+                      {dhcpStatus.lease_state === "leased"
+                        ? "DHCP lease acquired"
+                        : dhcpStatus.lease_state === "link_down"
+                          ? "WAN link is down"
+                          : "Waiting for a DHCP lease"}
+                    </p>
+                    <p>Address: {dhcpStatus.addresses.join(", ") || "—"}</p>
+                    <p>Gateway: {dhcpStatus.gateway || "—"}</p>
+                    <p>DNS: {dhcpStatus.dns.join(", ") || "—"}</p>
+                  </div>
+                )}
+                <button
+                  className="refresh-button"
+                  type="button"
+                  disabled={dhcpLoading}
+                  onClick={() => void refreshDHCPStatus(wanInterface)}
+                >
+                  {dhcpLoading ? "Refreshing…" : "Refresh DHCP status"}
+                </button>
+                <p className="port-help">
+                  Status is read from systemd-networkd. This page does not apply
+                  or change network settings.
+                </p>
+              </section>
+            </>
           )}
         </>
       )}

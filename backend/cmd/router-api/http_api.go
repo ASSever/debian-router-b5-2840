@@ -24,6 +24,7 @@ type api struct {
 	db                    *sql.DB
 	now                   func() time.Time
 	readNetworkInterfaces func() ([]networkinventory.Interface, error)
+	readNetworkDHCPStatus func(string) (networkinventory.DHCPStatus, error)
 }
 
 func newAPI(db *sql.DB) http.Handler {
@@ -39,10 +40,30 @@ func newAPIWithInterfaceReader(
 	uiDirectory string,
 	readNetworkInterfaces func() ([]networkinventory.Interface, error),
 ) http.Handler {
-	a := &api{db: db, now: time.Now, readNetworkInterfaces: readNetworkInterfaces}
+	return newAPIWithNetworkReaders(
+		db,
+		uiDirectory,
+		readNetworkInterfaces,
+		networkinventory.ReadDHCPStatus,
+	)
+}
+
+func newAPIWithNetworkReaders(
+	db *sql.DB,
+	uiDirectory string,
+	readNetworkInterfaces func() ([]networkinventory.Interface, error),
+	readNetworkDHCPStatus func(string) (networkinventory.DHCPStatus, error),
+) http.Handler {
+	a := &api{
+		db:                    db,
+		now:                   time.Now,
+		readNetworkInterfaces: readNetworkInterfaces,
+		readNetworkDHCPStatus: readNetworkDHCPStatus,
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", health)
 	mux.HandleFunc("GET /api/network/interfaces", a.networkInterfaces)
+	mux.HandleFunc("GET /api/network/dhcp", a.networkDHCPStatus)
 	mux.HandleFunc("POST /api/auth/login", a.login)
 	mux.HandleFunc("GET /api/auth/session", a.sessionStatus)
 	mux.HandleFunc("DELETE /api/auth/session", a.logout)
@@ -51,6 +72,28 @@ func newAPIWithInterfaceReader(
 	mux.Handle("GET /{$}", ui)
 	mux.Handle("GET /assets/", ui)
 	return requireHTTPS(securityHeaders(mux))
+}
+
+func (a *api) networkDHCPStatus(w http.ResponseWriter, r *http.Request) {
+	interfaceName := r.URL.Query().Get("interface")
+	if !networkinventory.ValidInterfaceName(interfaceName) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_interface"})
+		return
+	}
+	status, err := a.readNetworkDHCPStatus(interfaceName)
+	if err != nil {
+		log.Printf("read DHCP status for interface %s: %v", interfaceName, err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "wan_dhcp_status_unavailable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"interface":   status.Interface,
+		"link_state":  status.LinkState,
+		"lease_state": status.LeaseState,
+		"addresses":   status.Addresses,
+		"gateway":     status.Gateway,
+		"dns":         status.DNS,
+	})
 }
 
 func (a *api) networkInterfaces(w http.ResponseWriter, _ *http.Request) {

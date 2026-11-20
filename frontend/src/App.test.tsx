@@ -40,6 +40,21 @@ function interfaceResponse(): Response {
   } as Response;
 }
 
+function dhcpResponse(leaseState: "leased" | "link_down"): Response {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      interface: "enp1s0",
+      link_state: leaseState === "leased" ? "carrier" : "no-carrier",
+      lease_state: leaseState,
+      addresses: leaseState === "leased" ? ["192.0.2.10/24"] : [],
+      gateway: leaseState === "leased" ? "192.0.2.1" : "",
+      dns: leaseState === "leased" ? ["192.0.2.53"] : [],
+    }),
+  } as Response;
+}
+
 describe("router API health indicator", () => {
   const fetchMock = vi.fn<typeof fetch>();
 
@@ -118,6 +133,45 @@ describe("router API health indicator", () => {
     ).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/network/interfaces",
+      expect.objectContaining({ method: "GET", cache: "no-store" }),
+    );
+  });
+
+  it("shows a WAN DHCP lease and refreshes after link recovery", async () => {
+    const leaseStates: Array<"leased" | "link_down"> = ["link_down", "leased"];
+    fetchMock.mockImplementation((input) => {
+      if (input === "/api/network/interfaces") {
+        return Promise.resolve(interfaceResponse());
+      }
+      if (
+        typeof input === "string" &&
+        input.startsWith("/api/network/dhcp?interface=")
+      ) {
+        return Promise.resolve(dhcpResponse(leaseStates.shift() ?? "leased"));
+      }
+      return Promise.resolve(healthResponse(true));
+    });
+
+    render(<App />);
+    expect(await screen.findByText("1000 Mbps")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("WAN interface"), {
+      target: { value: "enp1s0" },
+    });
+    fireEvent.change(screen.getByLabelText("LAN interface"), {
+      target: { value: "enp2s0" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm selection" }));
+
+    expect(await screen.findByText("WAN link is down")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refresh DHCP status" }),
+    );
+    expect(await screen.findByText("DHCP lease acquired")).toBeInTheDocument();
+    expect(screen.getByText("Address: 192.0.2.10/24")).toBeInTheDocument();
+    expect(screen.getByText("Gateway: 192.0.2.1")).toBeInTheDocument();
+    expect(screen.getByText("DNS: 192.0.2.53")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/network/dhcp?interface=enp1s0",
       expect.objectContaining({ method: "GET", cache: "no-store" }),
     );
   });
