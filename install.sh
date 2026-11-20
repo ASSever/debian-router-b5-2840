@@ -110,9 +110,15 @@ if [ "$mode" != --check ]; then
         "$package/router-agent" "$package/web/" "$package/web/assets/" \
         "$package/web/assets/app.css" "$package/web/assets/app.js" \
         "$package/web/index.html" | sort)
+    pppoe_listing=$(printf '%s\n' "$package/" "$package/VERSION" "$package/PPPOE_SUPPORT" "$package/router-api" \
+        "$package/router-agent" "$package/web/" "$package/web/assets/" \
+        "$package/web/assets/app.css" "$package/web/assets/app.js" \
+        "$package/web/index.html" | sort)
     actual_listing=$(tar -tzf "$stage/$archive" | sort)
     has_agent=no
+    has_pppoe=no
     case "$actual_listing" in
+        "$pppoe_listing") has_agent=yes; has_ui=yes; has_pppoe=yes ;;
         "$agent_listing") has_agent=yes; has_ui=yes ;;
         "$ui_listing") has_ui=yes ;;
         "$legacy_listing") has_ui=no ;;
@@ -145,11 +151,20 @@ if [ "$mode" != --check ]; then
         echo 'Invalid privileged-agent payload.' >&2
         exit 5
     fi
+    if [ "$has_pppoe" = yes ] && {
+        [ ! -f "$stage/$package/PPPOE_SUPPORT" ] ||
+        [ -L "$stage/$package/PPPOE_SUPPORT" ] ||
+        [ "$(cat "$stage/$package/PPPOE_SUPPORT")" != pppd ];
+    }; then
+        echo 'Invalid PPPoE support marker.' >&2
+        exit 5
+    fi
 
     prefix=/opt/debian-router-b5-2840
     release_dir=$prefix/releases/$package_version
     service=/etc/systemd/system/debian-router-api.service
     agent_service=/etc/systemd/system/debian-router-agent.service
+    pppoe_service=/etc/systemd/system/debian-router-pppoe.service
     agent_current=$prefix/agent-current
     mkdir -p "$prefix/releases"
     previous_release=
@@ -191,6 +206,13 @@ if [ "$mode" != --check ]; then
             echo 'Installed privileged-agent binary differs from verified release.' >&2
             exit 6
         fi
+        if [ "$has_pppoe" = yes ] && {
+            [ ! -f "$release_dir/PPPOE_SUPPORT" ] || [ -L "$release_dir/PPPOE_SUPPORT" ] ||
+            ! cmp -s "$stage/$package/PPPOE_SUPPORT" "$release_dir/PPPOE_SUPPORT";
+        }; then
+            echo 'Installed PPPoE marker differs from verified release.' >&2
+            exit 6
+        fi
     else
         release_tmp=$prefix/releases/.new-$package_version-$$
         mkdir "$release_tmp"
@@ -198,6 +220,9 @@ if [ "$mode" != --check ]; then
         printf '%s\n' "$package_version" > "$release_tmp/VERSION"
         if [ "$has_agent" = yes ]; then
             install -m 0755 "$stage/$package/router-agent" "$release_tmp/router-agent"
+        fi
+        if [ "$has_pppoe" = yes ]; then
+            install -m 0644 "$stage/$package/PPPOE_SUPPORT" "$release_tmp/PPPOE_SUPPORT"
         fi
         if [ "$has_ui" = yes ]; then
             mkdir -p "$release_tmp/web/assets"
@@ -207,6 +232,13 @@ if [ "$mode" != --check ]; then
         fi
         mv -Tf "$release_tmp" "$release_dir"
         release_tmp=
+    fi
+
+    if [ "$has_pppoe" = yes ] && [ ! -x /usr/sbin/pppd ]; then
+        if ! apt-get install -y ppp; then
+            echo 'Could not install the Debian ppp package; active release was not changed.' >&2
+            exit 7
+        fi
     fi
 
     agent_gid=
@@ -248,6 +280,10 @@ if [ "$mode" != --check ]; then
     agent_unit_changed=no
     agent_was_active=no
     agent_was_enabled=no
+    pppoe_unit_changed=no
+    pppoe_unit_exists_before=no
+    pppoe_was_enabled=no
+    pppoe_was_active=no
     if [ -f "$agent_service" ]; then
         agent_unit_exists_before=yes
         cp -p "$agent_service" "$stage/previous-agent.service"
@@ -257,6 +293,12 @@ if [ "$mode" != --check ]; then
         if systemctl is-enabled --quiet debian-router-agent.service; then
             agent_was_enabled=yes
         fi
+    fi
+    if [ -f "$pppoe_service" ]; then
+        pppoe_unit_exists_before=yes
+        cp -p "$pppoe_service" "$stage/previous-pppoe.service"
+        if systemctl is-enabled --quiet debian-router-pppoe.service; then pppoe_was_enabled=yes; fi
+        if systemctl is-active --quiet debian-router-pppoe.service; then pppoe_was_active=yes; fi
     fi
 
     case "$package_version" in
@@ -411,6 +453,35 @@ EOF
         fi
     fi
 
+    if [ "$has_pppoe" = yes ]; then
+        pppoe_unit_tmp=$stage/debian-router-pppoe.service
+        cat > "$pppoe_unit_tmp" <<'EOF'
+[Unit]
+Description=Debian Router WAN PPPoE
+After=network.target debian-router-agent.service
+Requires=debian-router-agent.service
+ConditionPathExists=/var/lib/debian-router-agent/pppoe-active/options
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/test -S /run/debian-router-agent/agent.sock
+ExecStart=/usr/sbin/pppd file /var/lib/debian-router-agent/pppoe-active/options nodetach
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        if [ ! -f "$pppoe_service" ] || ! cmp -s "$pppoe_unit_tmp" "$pppoe_service"; then
+            pppoe_unit_changed=yes
+            install -m 0644 "$pppoe_unit_tmp" "$pppoe_service.new.$$"
+            mv -Tf "$pppoe_service.new.$$" "$pppoe_service"
+        fi
+    fi
+
     rollback_install() {
         if [ -n "$previous_release" ]; then
             ln -s "$previous_release" "$prefix/current.rollback.$$"
@@ -440,7 +511,21 @@ EOF
         elif [ "$agent_unit_changed" = yes ]; then
             rm -f -- "$agent_service"
         fi
+        if [ "$pppoe_unit_changed" = yes ]; then
+            if [ "$pppoe_unit_exists_before" = yes ]; then
+                cp -p "$stage/previous-pppoe.service" "$pppoe_service.new.$$"
+                mv -Tf "$pppoe_service.new.$$" "$pppoe_service"
+            else
+                rm -f -- "$pppoe_service"
+            fi
+        fi
         systemctl daemon-reload || :
+        if [ "$pppoe_unit_exists_before" = yes ]; then
+            if [ "$pppoe_was_enabled" = yes ]; then systemctl enable debian-router-pppoe.service || :; else systemctl disable debian-router-pppoe.service || :; fi
+            if [ "$pppoe_was_active" = yes ]; then systemctl restart debian-router-pppoe.service || :; else systemctl stop debian-router-pppoe.service || :; fi
+        elif [ "$pppoe_unit_changed" = yes ]; then
+            systemctl disable --now debian-router-pppoe.service || :
+        fi
         if [ "$agent_unit_exists_before" = yes ]; then
             if [ "$agent_was_enabled" = yes ]; then
                 systemctl enable debian-router-agent.service || :
@@ -469,10 +554,17 @@ EOF
         mv -Tf "$prefix/current.new.$$" "$prefix/current"
     fi
 
-    if [ "$unit_changed" = yes ] || [ "$agent_unit_changed" = yes ]; then
+    if [ "$unit_changed" = yes ] || [ "$agent_unit_changed" = yes ] || [ "$pppoe_unit_changed" = yes ]; then
         if ! systemctl daemon-reload; then
             rollback_install
             echo 'Could not reload systemd units; the previous release was restored.' >&2
+            exit 7
+        fi
+    fi
+    if [ "$has_pppoe" = yes ]; then
+        if ! systemctl enable debian-router-pppoe.service; then
+            rollback_install
+            echo 'Could not enable PPPoE support; the previous release was restored.' >&2
             exit 7
         fi
     fi

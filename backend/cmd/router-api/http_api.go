@@ -30,6 +30,11 @@ type api struct {
 	applyStaticWAN        func(context.Context, networkinventory.StaticWANConfig) (networkinventory.StaticWANTransaction, error)
 	confirmStaticWAN      func(context.Context, string) error
 	rollbackStaticWAN     func(context.Context, string) error
+	applyPPPoE            func(context.Context, networkinventory.PPPoEConfig) (networkinventory.PPPoETransaction, error)
+	readPPPoEStatus       func(context.Context) (networkinventory.PPPoEStatus, error)
+	confirmPPPoE          func(context.Context, string) error
+	rollbackPPPoE         func(context.Context, string) error
+	reconnectPPPoE        func(context.Context) error
 }
 
 func newAPI(db *sql.DB) http.Handler {
@@ -101,6 +106,11 @@ func newAPIWithNetworkOperations(
 		applyStaticWAN:        applyStaticWAN,
 		confirmStaticWAN:      confirmStaticWAN,
 		rollbackStaticWAN:     rollbackStaticWAN,
+		applyPPPoE:            applyPPPoEToAgent,
+		readPPPoEStatus:       readPPPoEStatusFromAgent,
+		confirmPPPoE:          confirmPPPoEAtAgent,
+		rollbackPPPoE:         rollbackPPPoEAtAgent,
+		reconnectPPPoE:        reconnectPPPoEAtAgent,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", health)
@@ -109,6 +119,11 @@ func newAPIWithNetworkOperations(
 	mux.HandleFunc("POST /api/network/wan/static", a.applyStaticWANSettings)
 	mux.HandleFunc("POST /api/network/wan/static/confirm", a.confirmStaticWANSettings)
 	mux.HandleFunc("POST /api/network/wan/static/rollback", a.rollbackStaticWANSettings)
+	mux.HandleFunc("GET /api/network/wan/pppoe", a.pppoeStatus)
+	mux.HandleFunc("POST /api/network/wan/pppoe", a.applyPPPoESettings)
+	mux.HandleFunc("POST /api/network/wan/pppoe/confirm", a.confirmPPPoESettings)
+	mux.HandleFunc("POST /api/network/wan/pppoe/rollback", a.rollbackPPPoESettings)
+	mux.HandleFunc("POST /api/network/wan/pppoe/reconnect", a.reconnectPPPoESettings)
 	mux.HandleFunc("POST /api/auth/login", a.login)
 	mux.HandleFunc("GET /api/auth/session", a.sessionStatus)
 	mux.HandleFunc("DELETE /api/auth/session", a.logout)

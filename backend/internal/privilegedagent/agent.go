@@ -27,6 +27,7 @@ type Request struct {
 	Interface       string                            `json:"interface,omitempty"`
 	Operation       string                            `json:"operation"`
 	StaticWANConfig *networkinventory.StaticWANConfig `json:"static_wan_config,omitempty"`
+	PPPoEConfig     *networkinventory.PPPoEConfig     `json:"pppoe_config,omitempty"`
 	TransactionID   string                            `json:"transaction_id,omitempty"`
 }
 
@@ -34,6 +35,8 @@ type Request struct {
 type Response struct {
 	DHCPStatus           *networkinventory.DHCPStatus           `json:"dhcp_status,omitempty"`
 	StaticWANTransaction *networkinventory.StaticWANTransaction `json:"static_wan_transaction,omitempty"`
+	PPPoETransaction     *networkinventory.PPPoETransaction     `json:"pppoe_transaction,omitempty"`
+	PPPoEStatus          *networkinventory.PPPoEStatus          `json:"pppoe_status,omitempty"`
 	Status               string                                 `json:"status,omitempty"`
 	Agent                string                                 `json:"agent,omitempty"`
 	Error                string                                 `json:"error,omitempty"`
@@ -43,6 +46,14 @@ type staticWANOperations interface {
 	Apply(context.Context, networkinventory.StaticWANConfig) (networkinventory.StaticWANTransaction, error)
 	Confirm(context.Context, string) error
 	Rollback(context.Context, string) error
+}
+
+type pppoeOperations interface {
+	Apply(context.Context, networkinventory.PPPoEConfig) (networkinventory.PPPoETransaction, error)
+	Confirm(context.Context, string) error
+	Rollback(context.Context, string) error
+	Reconnect(context.Context) error
+	Status() (networkinventory.PPPoEStatus, error)
 }
 
 // DefaultSocketPath returns the systemd-managed agent socket path.
@@ -59,7 +70,14 @@ func Serve(ctx context.Context, socketPath string, allowedGID uint32) error {
 	if err := manager.RecoverPending(ctx); err != nil {
 		return fmt.Errorf("recover pending WAN configuration: %w", err)
 	}
-	return serveWithOperations(ctx, socketPath, allowedGID, networkinventory.ReadDHCPStatus, manager)
+	pppoe, err := networkinventory.NewPPPoEManager()
+	if err != nil {
+		return err
+	}
+	if err := pppoe.RecoverPending(ctx); err != nil {
+		return fmt.Errorf("recover pending PPPoE configuration: %w", err)
+	}
+	return serveWithAllOperations(ctx, socketPath, allowedGID, networkinventory.ReadDHCPStatus, manager, pppoe)
 }
 
 func serveWithDHCPReader(
@@ -77,6 +95,17 @@ func serveWithOperations(
 	allowedGID uint32,
 	readDHCPStatus func(string) (networkinventory.DHCPStatus, error),
 	staticWAN staticWANOperations,
+) error {
+	return serveWithAllOperations(ctx, socketPath, allowedGID, readDHCPStatus, staticWAN, nil)
+}
+
+func serveWithAllOperations(
+	ctx context.Context,
+	socketPath string,
+	allowedGID uint32,
+	readDHCPStatus func(string) (networkinventory.DHCPStatus, error),
+	staticWAN staticWANOperations,
+	pppoe pppoeOperations,
 ) error {
 	if socketPath == "" {
 		return errors.New("agent socket path is empty")
@@ -119,7 +148,7 @@ func serveWithOperations(
 			}
 			return fmt.Errorf("accept privileged agent connection: %w", err)
 		}
-		handleConnectionWithOperations(connection, allowedGID, readDHCPStatus, staticWAN)
+		handleConnectionWithAllOperations(connection, allowedGID, readDHCPStatus, staticWAN, pppoe)
 	}
 }
 
@@ -149,6 +178,26 @@ func SendConfirmStaticWAN(ctx context.Context, socketPath, transactionID string)
 // SendRollbackStaticWAN restores the previous WAN configuration immediately.
 func SendRollbackStaticWAN(ctx context.Context, socketPath, transactionID string) (Response, error) {
 	return sendRequest(ctx, socketPath, Request{Operation: "static-wan-rollback", TransactionID: transactionID})
+}
+
+func SendApplyPPPoE(ctx context.Context, socketPath string, config networkinventory.PPPoEConfig) (Response, error) {
+	return sendRequest(ctx, socketPath, Request{Operation: "pppoe-apply", Interface: networkinventory.StaticWANInterface, PPPoEConfig: &config})
+}
+
+func SendPPPoEStatus(ctx context.Context, socketPath string) (Response, error) {
+	return sendRequest(ctx, socketPath, Request{Operation: "pppoe-status"})
+}
+
+func SendConfirmPPPoE(ctx context.Context, socketPath, transactionID string) (Response, error) {
+	return sendRequest(ctx, socketPath, Request{Operation: "pppoe-confirm", TransactionID: transactionID})
+}
+
+func SendRollbackPPPoE(ctx context.Context, socketPath, transactionID string) (Response, error) {
+	return sendRequest(ctx, socketPath, Request{Operation: "pppoe-rollback", TransactionID: transactionID})
+}
+
+func SendReconnectPPPoE(ctx context.Context, socketPath string) (Response, error) {
+	return sendRequest(ctx, socketPath, Request{Operation: "pppoe-reconnect"})
 }
 
 func sendRequest(ctx context.Context, socketPath string, request Request) (Response, error) {
@@ -232,6 +281,16 @@ func handleConnectionWithOperations(
 	readDHCPStatus func(string) (networkinventory.DHCPStatus, error),
 	staticWAN staticWANOperations,
 ) {
+	handleConnectionWithAllOperations(connection, allowedGID, readDHCPStatus, staticWAN, nil)
+}
+
+func handleConnectionWithAllOperations(
+	connection net.Conn,
+	allowedGID uint32,
+	readDHCPStatus func(string) (networkinventory.DHCPStatus, error),
+	staticWAN staticWANOperations,
+	pppoe pppoeOperations,
+) {
 	defer connection.Close()
 	_ = connection.SetDeadline(time.Now().Add(connectionTimeout))
 
@@ -253,13 +312,13 @@ func handleConnectionWithOperations(
 	}
 	switch request.Operation {
 	case "status":
-		if request.Interface != "" || request.StaticWANConfig != nil || request.TransactionID != "" {
+		if request.Interface != "" || request.StaticWANConfig != nil || request.PPPoEConfig != nil || request.TransactionID != "" {
 			writeResponse(connection, Response{Error: "invalid_request"})
 			return
 		}
 		writeResponse(connection, Response{Status: "ok", Agent: "ready"})
 	case "dhcp-status":
-		if !networkinventory.ValidInterfaceName(request.Interface) || request.StaticWANConfig != nil || request.TransactionID != "" {
+		if !networkinventory.ValidInterfaceName(request.Interface) || request.StaticWANConfig != nil || request.PPPoEConfig != nil || request.TransactionID != "" {
 			writeResponse(connection, Response{Error: "invalid_request"})
 			return
 		}
@@ -270,7 +329,7 @@ func handleConnectionWithOperations(
 		}
 		writeResponse(connection, Response{DHCPStatus: &status})
 	case "static-wan-apply":
-		if request.Interface != networkinventory.StaticWANInterface || request.StaticWANConfig == nil || request.TransactionID != "" {
+		if request.Interface != networkinventory.StaticWANInterface || request.StaticWANConfig == nil || request.PPPoEConfig != nil || request.TransactionID != "" {
 			writeResponse(connection, Response{Error: "invalid_request"})
 			return
 		}
@@ -291,7 +350,7 @@ func handleConnectionWithOperations(
 		}
 		writeResponse(connection, Response{StaticWANTransaction: &transaction})
 	case "static-wan-confirm", "static-wan-rollback":
-		if request.Interface != "" || request.StaticWANConfig != nil || !validTransactionID(request.TransactionID) {
+		if request.Interface != "" || request.StaticWANConfig != nil || request.PPPoEConfig != nil || !validTransactionID(request.TransactionID) {
 			writeResponse(connection, Response{Error: "invalid_request"})
 			return
 		}
@@ -314,6 +373,78 @@ func handleConnectionWithOperations(
 			return
 		}
 		writeResponse(connection, Response{Status: result})
+	case "pppoe-status":
+		if request.Interface != "" || request.StaticWANConfig != nil || request.PPPoEConfig != nil || request.TransactionID != "" {
+			writeResponse(connection, Response{Error: "invalid_request"})
+			return
+		}
+		if pppoe == nil {
+			writeResponse(connection, Response{Error: "unsupported_operation"})
+			return
+		}
+		status, err := pppoe.Status()
+		if err != nil {
+			writeResponse(connection, Response{Error: "pppoe_status_unavailable"})
+			return
+		}
+		writeResponse(connection, Response{PPPoEStatus: &status})
+	case "pppoe-apply":
+		if request.Interface != networkinventory.StaticWANInterface || request.PPPoEConfig == nil || request.StaticWANConfig != nil || request.TransactionID != "" || networkinventory.ValidatePPPoEConfig(*request.PPPoEConfig) != nil {
+			writeResponse(connection, Response{Error: "invalid_request"})
+			return
+		}
+		if pppoe == nil {
+			writeResponse(connection, Response{Error: "unsupported_operation"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), connectionTimeout)
+		defer cancel()
+		transaction, err := pppoe.Apply(ctx, *request.PPPoEConfig)
+		if err != nil {
+			writeResponse(connection, Response{Error: "pppoe_apply_failed"})
+			return
+		}
+		writeResponse(connection, Response{PPPoETransaction: &transaction})
+	case "pppoe-confirm", "pppoe-rollback":
+		if request.Interface != "" || request.StaticWANConfig != nil || request.PPPoEConfig != nil || !validTransactionID(request.TransactionID) {
+			writeResponse(connection, Response{Error: "invalid_request"})
+			return
+		}
+		if pppoe == nil {
+			writeResponse(connection, Response{Error: "unsupported_operation"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), connectionTimeout)
+		defer cancel()
+		result := "rolled_back"
+		var err error
+		if request.Operation == "pppoe-confirm" {
+			result = "confirmed"
+			err = pppoe.Confirm(ctx, request.TransactionID)
+		} else {
+			err = pppoe.Rollback(ctx, request.TransactionID)
+		}
+		if err != nil {
+			writeResponse(connection, Response{Error: "pppoe_transaction_failed"})
+			return
+		}
+		writeResponse(connection, Response{Status: result})
+	case "pppoe-reconnect":
+		if request.Interface != "" || request.StaticWANConfig != nil || request.PPPoEConfig != nil || request.TransactionID != "" {
+			writeResponse(connection, Response{Error: "invalid_request"})
+			return
+		}
+		if pppoe == nil {
+			writeResponse(connection, Response{Error: "unsupported_operation"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), connectionTimeout)
+		defer cancel()
+		if err := pppoe.Reconnect(ctx); err != nil {
+			writeResponse(connection, Response{Error: "pppoe_reconnect_failed"})
+			return
+		}
+		writeResponse(connection, Response{Status: "reconnecting"})
 	default:
 		writeResponse(connection, Response{Error: "unsupported_operation"})
 	}
