@@ -90,7 +90,7 @@ func ReadDHCPStatusWith(
 	if status.DHCPv4Client != nil && status.DHCPv4Client.Lease != nil {
 		result.LeaseState = "leased"
 	}
-	if status.CarrierState == "no-carrier" {
+	if status.CarrierState == "no-carrier" || status.CarrierState == "off" {
 		result.LeaseState = "link_down"
 	}
 	for _, address := range status.Addresses {
