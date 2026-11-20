@@ -40,7 +40,8 @@ func TestStaticWANApplyArmsRollbackBeforeChangingConfigAndConfirmKeepsStatic(t *
 			if err != nil || string(current) != string(original) {
 				t.Fatalf("config changed before rollback timer was armed: %v", err)
 			}
-			if !strings.Contains(joined, "--on-active=120s") || !strings.Contains(joined, "rollback ") {
+			if !strings.Contains(joined, "--on-active=120s") || !strings.Contains(joined, "rollback ") ||
+				!strings.Contains(joined, "--property=RestrictAddressFamilies=AF_UNIX AF_NETLINK") {
 				t.Fatalf("rollback command is incomplete: %s", joined)
 			}
 			return "", nil

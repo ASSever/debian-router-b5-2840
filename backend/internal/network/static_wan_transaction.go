@@ -310,7 +310,7 @@ func (m *StaticWANManager) startRollback(ctx context.Context, id string) error {
 		"--property=PrivateTmp=yes",
 		"--property=NoNewPrivileges=yes",
 		"--property=CapabilityBoundingSet=",
-		"--property=RestrictAddressFamilies=AF_UNIX",
+		"--property=RestrictAddressFamilies=AF_UNIX AF_NETLINK",
 		"--property=ReadWritePaths=/etc/systemd/network",
 		"--", m.executable, "rollback", id,
 	}
