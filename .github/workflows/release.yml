@@ -19,7 +19,7 @@ jobs:
       - name: Name the release
         id: version
         shell: bash
-        run: echo "value=0.1.0-step10-$(TZ=Europe/Moscow date +%Y%m%d-%H%M)-r${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+        run: echo "value=0.1.0-step11-$(TZ=Europe/Moscow date +%Y%m%d-%H%M)-r${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
       - name: Build and verify the package
         env:
           VERSION: ${{ steps.version.outputs.value }}
@@ -36,4 +36,4 @@ jobs:
           mkdir release
           cp "dist/$VERSION/debian-router-b5-2840-$VERSION.tar.gz" release/router-api-linux-amd64.tar.gz
           (cd release && sha256sum router-api-linux-amd64.tar.gz > router-api-linux-amd64.tar.gz.sha256)
-          gh release create "v$VERSION" release/router-api-linux-amd64.tar.gz release/router-api-linux-amd64.tar.gz.sha256 --target "$GITHUB_SHA" --title "Stage 10 $VERSION" --notes "Verified linux/amd64 API package from commit $GITHUB_SHA. Installed by the two-command Debian setup." --latest
+          gh release create "v$VERSION" release/router-api-linux-amd64.tar.gz release/router-api-linux-amd64.tar.gz.sha256 --target "$GITHUB_SHA" --title "Stage 11 $VERSION" --notes "HTTPS and administrator session API package from commit $GITHUB_SHA. Installed by the two-command Debian setup." --latest

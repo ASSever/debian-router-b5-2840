@@ -118,6 +118,9 @@ func Reset(ctx context.Context, db *sql.DB, present func(string) error) error {
 	if rows != 1 {
 		return errors.New("administrator change flag is missing")
 	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM sessions"); err != nil {
+		return fmt.Errorf("revoke sessions after password reset: %w", err)
+	}
 	if err := present(password); err != nil {
 		return fmt.Errorf("present administrator password: %w", err)
 	}
@@ -126,10 +129,29 @@ func Reset(ctx context.Context, db *sql.DB, present func(string) error) error {
 
 // Authenticate checks a password and reports whether it must be changed.
 func Authenticate(ctx context.Context, db *sql.DB, password string) (bool, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	mustChange, err := AuthenticateTx(ctx, tx, password)
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return mustChange, nil
+}
+
+// AuthenticateTx checks a password using the caller's transaction. Browser login
+// uses the same transaction to insert a session, so a concurrent password reset
+// cannot create a valid session from a password that has already been replaced.
+func AuthenticateTx(ctx context.Context, tx *sql.Tx, password string) (bool, error) {
 	if len(password) > maxPassword {
 		return false, ErrInvalidCredentials
 	}
-	hash, mustChange, err := readAccount(ctx, db)
+	hash, mustChange, err := readAccount(ctx, tx)
 	if err != nil {
 		return false, err
 	}
@@ -191,10 +213,34 @@ func ChangePassword(ctx context.Context, db *sql.DB, current, replacement string
 	if rows != 1 {
 		return errors.New("administrator change flag is missing")
 	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM sessions"); err != nil {
+		return fmt.Errorf("revoke sessions after password change: %w", err)
+	}
 	return tx.Commit()
 }
 
-func readAccount(ctx context.Context, db *sql.DB) (string, bool, error) {
+// MustChange reports whether the administrator must replace the initial or reset password.
+func MustChange(ctx context.Context, db *sql.DB) (bool, error) {
+	var flag string
+	if err := db.QueryRowContext(ctx, "SELECT value FROM settings WHERE key = ?", mustChangeKey).Scan(&flag); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, ErrInvalidCredentials
+		}
+		return false, err
+	}
+	switch flag {
+	case "0":
+		return false, nil
+	case "1":
+		return true, nil
+	default:
+		return false, errors.New("invalid administrator change flag")
+	}
+}
+
+func readAccount(ctx context.Context, db interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}) (string, bool, error) {
 	var hash, flag string
 	if err := db.QueryRowContext(ctx, "SELECT value FROM settings WHERE key = ?", passwordKey).Scan(&hash); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

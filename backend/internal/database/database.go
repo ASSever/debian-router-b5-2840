@@ -9,7 +9,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 // Open opens the persistent application database and applies pending migrations.
 func Open(path string) (*sql.DB, error) {
@@ -63,6 +63,17 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("create settings table: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations(version) VALUES (1)"); err != nil {
+			return fmt.Errorf("record schema version: %w", err)
+		}
+	}
+	if current < 2 {
+		if _, err := tx.ExecContext(ctx, `CREATE TABLE sessions (
+			token_hash BLOB PRIMARY KEY,
+			expires_at INTEGER NOT NULL
+		)`); err != nil {
+			return fmt.Errorf("create sessions table: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations(version) VALUES (2)"); err != nil {
 			return fmt.Errorf("record schema version: %w", err)
 		}
 	}

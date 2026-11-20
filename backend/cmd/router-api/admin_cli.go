@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/ASSever/debian-router-b5-2840/backend/internal/admin"
 	"golang.org/x/term"
@@ -13,7 +14,7 @@ import (
 
 func adminCommand(db *sql.DB, args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: router-api [admin-status|admin-init|admin-login|admin-reset]")
+		return errors.New("usage: router-api [admin-status|admin-init|admin-login|admin-reset|tls-certificate]")
 	}
 	ctx := context.Background()
 	switch args[0] {
@@ -94,8 +95,23 @@ func adminCommand(db *sql.DB, args []string) error {
 		}
 		fmt.Fprintln(os.Stdout, "Password changed. Login successful.")
 		return nil
+	case "tls-certificate":
+		dataDir := os.Getenv("STATE_DIRECTORY")
+		if dataDir == "" {
+			dataDir = "."
+		}
+		certPath, _, _, err := loadTLSCertificate(filepath.Clean(dataDir))
+		if err != nil {
+			return err
+		}
+		certificate, err := os.ReadFile(certPath)
+		if err != nil {
+			return fmt.Errorf("read TLS certificate: %w", err)
+		}
+		_, err = os.Stdout.Write(certificate)
+		return err
 	default:
-		return errors.New("usage: router-api [admin-status|admin-init|admin-login|admin-reset]")
+		return errors.New("usage: router-api [admin-status|admin-init|admin-login|admin-reset|tls-certificate]")
 	}
 }
 
