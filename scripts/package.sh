@@ -13,7 +13,7 @@ if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-step[0-9]{2}-
     exit 2
 fi
 
-for tool in go tar gzip sha256sum mktemp; do
+for tool in go tar gzip sha256sum mktemp sort; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         printf 'Required tool is missing: %s\n' "$tool" >&2
         exit 3
@@ -22,17 +22,30 @@ done
 
 repo=$(CDPATH= cd "$(dirname "$0")/.." && pwd)
 output_dir=$repo/dist
+ui_dist=$repo/frontend/dist
 package=debian-router-b5-2840-$version
 if [ -e "$output_dir/$version" ]; then
     printf 'Package already exists: %s\n' "$output_dir/$version" >&2
     exit 4
 fi
 
+for asset in index.html assets/app.js assets/app.css; do
+    if [ ! -f "$ui_dist/$asset" ] || [ -L "$ui_dist/$asset" ]; then
+        printf 'Required UI build output is missing or invalid: %s\n' "$ui_dist/$asset" >&2
+        echo 'Build the frontend before packaging with: cd frontend && npm ci && npm run build' >&2
+        exit 5
+    fi
+done
+
 mkdir -p "$output_dir"
 stage=$(mktemp -d "$output_dir/.package.XXXXXXXX")
 trap 'rm -r -- "$stage"' EXIT HUP INT TERM
 mkdir "$stage/$package"
 printf '%s\n' "$version" > "$stage/$package/VERSION"
+mkdir -p "$stage/$package/web/assets"
+install -m 0644 "$ui_dist/index.html" "$stage/$package/web/index.html"
+install -m 0644 "$ui_dist/assets/app.js" "$stage/$package/web/assets/app.js"
+install -m 0644 "$ui_dist/assets/app.css" "$stage/$package/web/assets/app.css"
 
 (cd "$repo/backend" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
     go build -trimpath -buildvcs=false -ldflags=-buildid= \
@@ -41,6 +54,13 @@ printf '%s\n' "$version" > "$stage/$package/VERSION"
 tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
     -C "$stage" -cf "$stage/$package.tar" "$package"
 gzip -n "$stage/$package.tar"
+expected_listing=$(printf '%s\n' "$package/" "$package/VERSION" "$package/router-api" \
+    "$package/web/" "$package/web/assets/" "$package/web/assets/app.css" \
+    "$package/web/assets/app.js" "$package/web/index.html" | sort)
+if [ "$(tar -tzf "$stage/$package.tar.gz" | sort)" != "$expected_listing" ]; then
+    echo 'Release package contains unexpected files.' >&2
+    exit 6
+fi
 (cd "$stage" && sha256sum "$package.tar.gz" > "$package.tar.gz.sha256")
 rm -r -- "$stage/$package"
 mv -T -- "$stage" "$output_dir/$version"
