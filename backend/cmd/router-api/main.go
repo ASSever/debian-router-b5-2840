@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ASSever/debian-router-b5-2840/backend/internal/admin"
 	"github.com/ASSever/debian-router-b5-2840/backend/internal/database"
 )
 
@@ -27,6 +28,19 @@ func main() {
 		log.Fatalf("open state database: %v", err)
 	}
 	defer db.Close()
+	if len(os.Args) > 1 {
+		if err := adminCommand(db, os.Args[1:]); err != nil {
+			log.Fatalf("administrator command failed: %v", err)
+		}
+		return
+	}
+	initialized, err := admin.Exists(context.Background(), db)
+	if err != nil {
+		log.Fatalf("read administrator state: %v", err)
+	}
+	if !initialized {
+		log.Fatal("administrator is not initialized")
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", health)

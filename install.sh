@@ -147,6 +147,46 @@ if [ "$mode" != --check ]; then
         release_tmp=
     fi
 
+    case "$package_version" in
+        *-step0[0-9]-*) ;;
+        *)
+            if ! command -v systemd-run >/dev/null 2>&1; then
+                echo 'systemd-run is required to initialize the administrator.' >&2
+                exit 4
+            fi
+            run_admin() {
+                systemd-run --pipe --quiet --collect \
+                    -p DynamicUser=yes \
+                    -p StateDirectory=debian-router-b5-2840 \
+                    -p StateDirectoryMode=0700 \
+                    -p UMask=0077 \
+                    -p NoNewPrivileges=yes \
+                    -p ProtectSystem=strict \
+                    -p ProtectHome=yes \
+                    -p PrivateTmp=yes \
+                    "$release_dir/router-api" "$1"
+            }
+            admin_status=$(run_admin admin-status) || {
+                echo 'Could not read administrator state; the active release was not changed.' >&2
+                exit 7
+            }
+            case "$admin_status" in
+                initialized) ;;
+                missing)
+                    if [ ! -t 1 ]; then
+                        echo 'An interactive terminal is required to show the initial admin password.' >&2
+                        exit 4
+                    fi
+                    run_admin admin-init || {
+                        echo 'Administrator setup failed; the active release was not changed.' >&2
+                        exit 7
+                    }
+                    ;;
+                *) echo 'Unexpected administrator status; the active release was not changed.' >&2; exit 7 ;;
+            esac
+            ;;
+    esac
+
     unit_tmp=$stage/debian-router-api.service
     cat > "$unit_tmp" <<'EOF'
 [Unit]
