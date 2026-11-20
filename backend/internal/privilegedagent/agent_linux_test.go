@@ -60,6 +60,52 @@ func TestAllowedDHCPStatusRequestReturnsFilteredStatus(t *testing.T) {
 	}
 }
 
+func TestStaticWANOperationsUseOnlyValidatedFixedWANRequests(t *testing.T) {
+	operations := &fakeStaticWANOperations{
+		transaction: networkinventory.StaticWANTransaction{
+			ID:        "0123456789abcdef0123456789abcdef",
+			ExpiresAt: time.Now().Add(120 * time.Second).UTC(),
+		},
+	}
+	socketPath, stop := startTestServerWithOperations(
+		t,
+		uint32(syscall.Getgid()),
+		networkinventory.ReadDHCPStatus,
+		operations,
+	)
+	defer stop()
+
+	response, err := SendApplyStaticWAN(context.Background(), socketPath, networkinventory.StaticWANConfig{
+		Address: "192.168.1.104/24",
+		Gateway: "192.168.1.1",
+		DNS:     []string{"192.168.1.1"},
+	})
+	if err != nil || response.Error != "" || response.StaticWANTransaction == nil {
+		t.Fatalf("static apply response = %#v, error = %v", response, err)
+	}
+	if operations.applyCount != 1 || operations.applied.Address != "192.168.1.104/24" {
+		t.Fatalf("apply calls = %d, config = %#v", operations.applyCount, operations.applied)
+	}
+
+	response, err = SendApplyStaticWAN(context.Background(), socketPath, networkinventory.StaticWANConfig{
+		Address: "192.168.1.104/24",
+		Gateway: "192.168.2.1",
+		DNS:     []string{"192.168.1.1"},
+	})
+	if err != nil || response.Error != "invalid_static_config" || operations.applyCount != 1 {
+		t.Fatalf("invalid gateway response = %#v, error = %v, apply calls = %d", response, err, operations.applyCount)
+	}
+
+	response, err = SendConfirmStaticWAN(context.Background(), socketPath, operations.transaction.ID)
+	if err != nil || response.Status != "confirmed" || operations.confirmed != operations.transaction.ID {
+		t.Fatalf("confirm response = %#v, error = %v, confirmed ID = %q", response, err, operations.confirmed)
+	}
+	response, err = SendRollbackStaticWAN(context.Background(), socketPath, operations.transaction.ID)
+	if err != nil || response.Status != "rolled_back" || operations.rolledBack != operations.transaction.ID {
+		t.Fatalf("rollback response = %#v, error = %v, rolled back ID = %q", response, err, operations.rolledBack)
+	}
+}
+
 func TestDHCPStatusRequestRejectsInvalidInterface(t *testing.T) {
 	called := false
 	socketPath, stop := startTestServerWithDHCPReader(
@@ -99,7 +145,7 @@ func TestClientRetriesUntilSocketAppears(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	serverDone := make(chan error, 1)
 	go func() {
-		serverDone <- Serve(ctx, socketPath, uint32(syscall.Getgid()))
+		serverDone <- serveWithDHCPReader(ctx, socketPath, uint32(syscall.Getgid()), networkinventory.ReadDHCPStatus)
 	}()
 	defer func() {
 		cancel()
@@ -197,12 +243,21 @@ func startTestServerWithDHCPReader(
 	allowedGID uint32,
 	readDHCPStatus func(string) (networkinventory.DHCPStatus, error),
 ) (string, func()) {
+	return startTestServerWithOperations(t, allowedGID, readDHCPStatus, nil)
+}
+
+func startTestServerWithOperations(
+	t *testing.T,
+	allowedGID uint32,
+	readDHCPStatus func(string) (networkinventory.DHCPStatus, error),
+	staticWAN staticWANOperations,
+) (string, func()) {
 	t.Helper()
 	socketPath := filepath.Join(t.TempDir(), "agent.sock")
 	ctx, cancel := context.WithCancel(context.Background())
 	serverDone := make(chan error, 1)
 	go func() {
-		serverDone <- serveWithDHCPReader(ctx, socketPath, allowedGID, readDHCPStatus)
+		serverDone <- serveWithOperations(ctx, socketPath, allowedGID, readDHCPStatus, staticWAN)
 	}()
 
 	deadline := time.Now().Add(time.Second)
@@ -235,6 +290,30 @@ func startTestServerWithDHCPReader(
 	}
 	t.Cleanup(stop)
 	return socketPath, stop
+}
+
+type fakeStaticWANOperations struct {
+	transaction networkinventory.StaticWANTransaction
+	applied     networkinventory.StaticWANConfig
+	applyCount  int
+	confirmed   string
+	rolledBack  string
+}
+
+func (f *fakeStaticWANOperations) Apply(_ context.Context, config networkinventory.StaticWANConfig) (networkinventory.StaticWANTransaction, error) {
+	f.applied = config
+	f.applyCount++
+	return f.transaction, nil
+}
+
+func (f *fakeStaticWANOperations) Confirm(_ context.Context, id string) error {
+	f.confirmed = id
+	return nil
+}
+
+func (f *fakeStaticWANOperations) Rollback(_ context.Context, id string) error {
+	f.rolledBack = id
+	return nil
 }
 
 func sendRawRequest(t *testing.T, socketPath, request string) Response {

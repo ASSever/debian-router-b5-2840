@@ -27,6 +27,9 @@ type api struct {
 	now                   func() time.Time
 	readNetworkInterfaces func() ([]networkinventory.Interface, error)
 	readNetworkDHCPStatus func(string) (networkinventory.DHCPStatus, error)
+	applyStaticWAN        func(context.Context, networkinventory.StaticWANConfig) (networkinventory.StaticWANTransaction, error)
+	confirmStaticWAN      func(context.Context, string) error
+	rollbackStaticWAN     func(context.Context, string) error
 }
 
 func newAPI(db *sql.DB) http.Handler {
@@ -70,16 +73,42 @@ func newAPIWithNetworkReaders(
 	readNetworkInterfaces func() ([]networkinventory.Interface, error),
 	readNetworkDHCPStatus func(string) (networkinventory.DHCPStatus, error),
 ) http.Handler {
+	return newAPIWithNetworkOperations(
+		db,
+		uiDirectory,
+		readNetworkInterfaces,
+		readNetworkDHCPStatus,
+		applyStaticWANToAgent,
+		confirmStaticWANAtAgent,
+		rollbackStaticWANAtAgent,
+	)
+}
+
+func newAPIWithNetworkOperations(
+	db *sql.DB,
+	uiDirectory string,
+	readNetworkInterfaces func() ([]networkinventory.Interface, error),
+	readNetworkDHCPStatus func(string) (networkinventory.DHCPStatus, error),
+	applyStaticWAN func(context.Context, networkinventory.StaticWANConfig) (networkinventory.StaticWANTransaction, error),
+	confirmStaticWAN func(context.Context, string) error,
+	rollbackStaticWAN func(context.Context, string) error,
+) http.Handler {
 	a := &api{
 		db:                    db,
 		now:                   time.Now,
 		readNetworkInterfaces: readNetworkInterfaces,
 		readNetworkDHCPStatus: readNetworkDHCPStatus,
+		applyStaticWAN:        applyStaticWAN,
+		confirmStaticWAN:      confirmStaticWAN,
+		rollbackStaticWAN:     rollbackStaticWAN,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", health)
 	mux.HandleFunc("GET /api/network/interfaces", a.networkInterfaces)
 	mux.HandleFunc("GET /api/network/dhcp", a.networkDHCPStatus)
+	mux.HandleFunc("POST /api/network/wan/static", a.applyStaticWANSettings)
+	mux.HandleFunc("POST /api/network/wan/static/confirm", a.confirmStaticWANSettings)
+	mux.HandleFunc("POST /api/network/wan/static/rollback", a.rollbackStaticWANSettings)
 	mux.HandleFunc("POST /api/auth/login", a.login)
 	mux.HandleFunc("GET /api/auth/session", a.sessionStatus)
 	mux.HandleFunc("DELETE /api/auth/session", a.logout)
@@ -88,6 +117,38 @@ func newAPIWithNetworkReaders(
 	mux.Handle("GET /{$}", ui)
 	mux.Handle("GET /assets/", ui)
 	return requireHTTPS(securityHeaders(mux))
+}
+
+func applyStaticWANToAgent(ctx context.Context, config networkinventory.StaticWANConfig) (networkinventory.StaticWANTransaction, error) {
+	socketPath := agentSocketPath()
+	response, err := privilegedagent.SendApplyStaticWAN(ctx, socketPath, config)
+	if err != nil || response.Error != "" || response.StaticWANTransaction == nil {
+		return networkinventory.StaticWANTransaction{}, errors.New("apply static WAN configuration")
+	}
+	return *response.StaticWANTransaction, nil
+}
+
+func confirmStaticWANAtAgent(ctx context.Context, transactionID string) error {
+	response, err := privilegedagent.SendConfirmStaticWAN(ctx, agentSocketPath(), transactionID)
+	if err != nil || response.Error != "" || response.Status != "confirmed" {
+		return errors.New("confirm static WAN configuration")
+	}
+	return nil
+}
+
+func rollbackStaticWANAtAgent(ctx context.Context, transactionID string) error {
+	response, err := privilegedagent.SendRollbackStaticWAN(ctx, agentSocketPath(), transactionID)
+	if err != nil || response.Error != "" || response.Status != "rolled_back" {
+		return errors.New("roll back static WAN configuration")
+	}
+	return nil
+}
+
+func agentSocketPath() string {
+	if socketPath := os.Getenv("ROUTER_AGENT_SOCKET"); socketPath != "" {
+		return socketPath
+	}
+	return privilegedagent.DefaultSocketPath()
 }
 
 func (a *api) networkDHCPStatus(w http.ResponseWriter, r *http.Request) {
@@ -110,6 +171,122 @@ func (a *api) networkDHCPStatus(w http.ResponseWriter, r *http.Request) {
 		"gateway":     status.Gateway,
 		"dns":         status.DNS,
 	})
+}
+
+func (a *api) applyStaticWANSettings(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeNetworkMutation(w, r) {
+		return
+	}
+	var config networkinventory.StaticWANConfig
+	if err := decodeJSON(w, r, &config); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+		return
+	}
+	if err := networkinventory.ValidateStaticWAN(config); err != nil {
+		switch {
+		case errors.Is(err, networkinventory.ErrStaticWANAddress):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_static_address"})
+		case errors.Is(err, networkinventory.ErrStaticWANGateway):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_static_gateway"})
+		case errors.Is(err, networkinventory.ErrStaticWANDNS):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_static_dns"})
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_static_config"})
+		}
+		return
+	}
+	if a.applyStaticWAN == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "static_wan_unavailable"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 18*time.Second)
+	defer cancel()
+	transaction, err := a.applyStaticWAN(ctx, config)
+	if err != nil {
+		log.Printf("apply static WAN configuration: %v", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "static_wan_apply_failed"})
+		return
+	}
+	writeJSON(w, http.StatusAccepted, transaction)
+}
+
+func (a *api) confirmStaticWANSettings(w http.ResponseWriter, r *http.Request) {
+	a.finishStaticWANSettings(w, r, true)
+}
+
+func (a *api) rollbackStaticWANSettings(w http.ResponseWriter, r *http.Request) {
+	a.finishStaticWANSettings(w, r, false)
+}
+
+func (a *api) finishStaticWANSettings(w http.ResponseWriter, r *http.Request, confirm bool) {
+	if !a.authorizeNetworkMutation(w, r) {
+		return
+	}
+	var request struct {
+		TransactionID string `json:"transaction_id"`
+	}
+	if err := decodeJSON(w, r, &request); err != nil || !validStaticWANTransactionID(request.TransactionID) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+		return
+	}
+	operation := a.rollbackStaticWAN
+	result := "rolled_back"
+	if confirm {
+		operation = a.confirmStaticWAN
+		result = "confirmed"
+	}
+	if operation == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "static_wan_unavailable"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 18*time.Second)
+	defer cancel()
+	if err := operation(ctx, request.TransactionID); err != nil {
+		log.Printf("%s static WAN configuration: %v", result, err)
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "static_wan_transaction_failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": result})
+}
+
+func (a *api) authorizeNetworkMutation(w http.ResponseWriter, r *http.Request) bool {
+	if !sameOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "origin_rejected"})
+		return false
+	}
+	_, ok, err := a.validSession(r)
+	if err != nil {
+		log.Printf("read administrator session for network mutation: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal_error"})
+		return false
+	}
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return false
+	}
+	mustChange, err := admin.MustChange(r.Context(), a.db)
+	if err != nil {
+		log.Printf("read administrator password state for network mutation: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal_error"})
+		return false
+	}
+	if mustChange {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "password_change_required"})
+		return false
+	}
+	return true
+}
+
+func validStaticWANTransactionID(id string) bool {
+	if len(id) != 32 {
+		return false
+	}
+	for _, value := range id {
+		if !(value >= '0' && value <= '9') && !(value >= 'a' && value <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *api) networkInterfaces(w http.ResponseWriter, _ *http.Request) {

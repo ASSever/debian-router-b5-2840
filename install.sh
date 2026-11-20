@@ -369,7 +369,7 @@ EOF
         cat > "$agent_unit_tmp" <<EOF
 [Unit]
 Description=Debian Router Privileged Agent
-After=local-fs.target
+After=local-fs.target systemd-networkd.service
 
 [Service]
 Type=simple
@@ -377,6 +377,8 @@ User=root
 Group=debian-router-agent
 RuntimeDirectory=debian-router-agent
 RuntimeDirectoryMode=0750
+StateDirectory=debian-router-agent
+StateDirectoryMode=0700
 UMask=0077
 Environment=ROUTER_AGENT_SOCKET=/run/debian-router-agent/agent.sock
 Environment=ROUTER_AGENT_ALLOWED_GID=$agent_gid
@@ -388,6 +390,7 @@ CapabilityBoundingSet=
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
+ReadWritePaths=/etc/systemd/network
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes

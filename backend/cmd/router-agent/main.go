@@ -9,7 +9,9 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 
+	"github.com/ASSever/debian-router-b5-2840/backend/internal/network"
 	"github.com/ASSever/debian-router-b5-2840/backend/internal/privilegedagent"
 )
 
@@ -41,8 +43,20 @@ func run(arguments []string) error {
 		}
 		return nil
 	}
+	if len(arguments) == 2 && arguments[0] == "rollback" {
+		if os.Geteuid() != 0 {
+			return errors.New("WAN rollback requires root")
+		}
+		manager, err := network.NewStaticWANManager()
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		return manager.RollbackFromTimer(ctx, arguments[1])
+	}
 	if len(arguments) != 0 {
-		return errors.New("usage: router-agent [request OPERATION]")
+		return errors.New("usage: router-agent [request OPERATION | rollback TRANSACTION_ID]")
 	}
 
 	allowedGIDText := os.Getenv("ROUTER_AGENT_ALLOWED_GID")

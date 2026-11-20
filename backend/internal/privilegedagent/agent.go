@@ -19,21 +19,30 @@ const (
 	defaultSocketPath = "/run/debian-router-agent/agent.sock"
 	maxRequestBytes   = 1024
 	maxResponseBytes  = 1024
-	connectionTimeout = 2 * time.Second
+	connectionTimeout = 20 * time.Second
 )
 
 // Request is the only message accepted by the privileged agent.
 type Request struct {
-	Interface string
-	Operation string `json:"operation"`
+	Interface       string                            `json:"interface,omitempty"`
+	Operation       string                            `json:"operation"`
+	StaticWANConfig *networkinventory.StaticWANConfig `json:"static_wan_config,omitempty"`
+	TransactionID   string                            `json:"transaction_id,omitempty"`
 }
 
 // Response contains harmless status data or a stable error code.
 type Response struct {
-	DHCPStatus *networkinventory.DHCPStatus
-	Status     string `json:"status,omitempty"`
-	Agent      string `json:"agent,omitempty"`
-	Error      string `json:"error,omitempty"`
+	DHCPStatus           *networkinventory.DHCPStatus           `json:"dhcp_status,omitempty"`
+	StaticWANTransaction *networkinventory.StaticWANTransaction `json:"static_wan_transaction,omitempty"`
+	Status               string                                 `json:"status,omitempty"`
+	Agent                string                                 `json:"agent,omitempty"`
+	Error                string                                 `json:"error,omitempty"`
+}
+
+type staticWANOperations interface {
+	Apply(context.Context, networkinventory.StaticWANConfig) (networkinventory.StaticWANTransaction, error)
+	Confirm(context.Context, string) error
+	Rollback(context.Context, string) error
 }
 
 // DefaultSocketPath returns the systemd-managed agent socket path.
@@ -43,7 +52,14 @@ func DefaultSocketPath() string {
 
 // Serve accepts bounded requests from peers whose primary GID is allowedGID.
 func Serve(ctx context.Context, socketPath string, allowedGID uint32) error {
-	return serveWithDHCPReader(ctx, socketPath, allowedGID, networkinventory.ReadDHCPStatus)
+	manager, err := networkinventory.NewStaticWANManager()
+	if err != nil {
+		return err
+	}
+	if err := manager.RecoverPending(ctx); err != nil {
+		return fmt.Errorf("recover pending WAN configuration: %w", err)
+	}
+	return serveWithOperations(ctx, socketPath, allowedGID, networkinventory.ReadDHCPStatus, manager)
 }
 
 func serveWithDHCPReader(
@@ -51,6 +67,16 @@ func serveWithDHCPReader(
 	socketPath string,
 	allowedGID uint32,
 	readDHCPStatus func(string) (networkinventory.DHCPStatus, error),
+) error {
+	return serveWithOperations(ctx, socketPath, allowedGID, readDHCPStatus, nil)
+}
+
+func serveWithOperations(
+	ctx context.Context,
+	socketPath string,
+	allowedGID uint32,
+	readDHCPStatus func(string) (networkinventory.DHCPStatus, error),
+	staticWAN staticWANOperations,
 ) error {
 	if socketPath == "" {
 		return errors.New("agent socket path is empty")
@@ -93,7 +119,7 @@ func serveWithDHCPReader(
 			}
 			return fmt.Errorf("accept privileged agent connection: %w", err)
 		}
-		handleConnection(connection, allowedGID, readDHCPStatus)
+		handleConnectionWithOperations(connection, allowedGID, readDHCPStatus, staticWAN)
 	}
 }
 
@@ -108,6 +134,21 @@ func SendDHCPStatus(ctx context.Context, socketPath, interfaceName string) (Resp
 		Operation: "dhcp-status",
 		Interface: interfaceName,
 	})
+}
+
+// SendApplyStaticWAN sends a fully validated static profile to the privileged agent.
+func SendApplyStaticWAN(ctx context.Context, socketPath string, config networkinventory.StaticWANConfig) (Response, error) {
+	return sendRequest(ctx, socketPath, Request{Operation: "static-wan-apply", Interface: networkinventory.StaticWANInterface, StaticWANConfig: &config})
+}
+
+// SendConfirmStaticWAN commits a verified static WAN transaction.
+func SendConfirmStaticWAN(ctx context.Context, socketPath, transactionID string) (Response, error) {
+	return sendRequest(ctx, socketPath, Request{Operation: "static-wan-confirm", TransactionID: transactionID})
+}
+
+// SendRollbackStaticWAN restores the previous WAN configuration immediately.
+func SendRollbackStaticWAN(ctx context.Context, socketPath, transactionID string) (Response, error) {
+	return sendRequest(ctx, socketPath, Request{Operation: "static-wan-rollback", TransactionID: transactionID})
 }
 
 func sendRequest(ctx context.Context, socketPath string, request Request) (Response, error) {
@@ -182,6 +223,15 @@ func handleConnection(
 	allowedGID uint32,
 	readDHCPStatus func(string) (networkinventory.DHCPStatus, error),
 ) {
+	handleConnectionWithOperations(connection, allowedGID, readDHCPStatus, nil)
+}
+
+func handleConnectionWithOperations(
+	connection net.Conn,
+	allowedGID uint32,
+	readDHCPStatus func(string) (networkinventory.DHCPStatus, error),
+	staticWAN staticWANOperations,
+) {
 	defer connection.Close()
 	_ = connection.SetDeadline(time.Now().Add(connectionTimeout))
 
@@ -203,13 +253,13 @@ func handleConnection(
 	}
 	switch request.Operation {
 	case "status":
-		if request.Interface != "" {
+		if request.Interface != "" || request.StaticWANConfig != nil || request.TransactionID != "" {
 			writeResponse(connection, Response{Error: "invalid_request"})
 			return
 		}
 		writeResponse(connection, Response{Status: "ok", Agent: "ready"})
 	case "dhcp-status":
-		if !networkinventory.ValidInterfaceName(request.Interface) {
+		if !networkinventory.ValidInterfaceName(request.Interface) || request.StaticWANConfig != nil || request.TransactionID != "" {
 			writeResponse(connection, Response{Error: "invalid_request"})
 			return
 		}
@@ -219,9 +269,66 @@ func handleConnection(
 			return
 		}
 		writeResponse(connection, Response{DHCPStatus: &status})
+	case "static-wan-apply":
+		if request.Interface != networkinventory.StaticWANInterface || request.StaticWANConfig == nil || request.TransactionID != "" {
+			writeResponse(connection, Response{Error: "invalid_request"})
+			return
+		}
+		if err := networkinventory.ValidateStaticWAN(*request.StaticWANConfig); err != nil {
+			writeResponse(connection, Response{Error: "invalid_static_config"})
+			return
+		}
+		if staticWAN == nil {
+			writeResponse(connection, Response{Error: "unsupported_operation"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), connectionTimeout)
+		defer cancel()
+		transaction, err := staticWAN.Apply(ctx, *request.StaticWANConfig)
+		if err != nil {
+			writeResponse(connection, Response{Error: "static_wan_apply_failed"})
+			return
+		}
+		writeResponse(connection, Response{StaticWANTransaction: &transaction})
+	case "static-wan-confirm", "static-wan-rollback":
+		if request.Interface != "" || request.StaticWANConfig != nil || !validTransactionID(request.TransactionID) {
+			writeResponse(connection, Response{Error: "invalid_request"})
+			return
+		}
+		if staticWAN == nil {
+			writeResponse(connection, Response{Error: "unsupported_operation"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), connectionTimeout)
+		defer cancel()
+		var err error
+		result := "confirmed"
+		if request.Operation == "static-wan-confirm" {
+			err = staticWAN.Confirm(ctx, request.TransactionID)
+		} else {
+			result = "rolled_back"
+			err = staticWAN.Rollback(ctx, request.TransactionID)
+		}
+		if err != nil {
+			writeResponse(connection, Response{Error: "static_wan_transaction_failed"})
+			return
+		}
+		writeResponse(connection, Response{Status: result})
 	default:
 		writeResponse(connection, Response{Error: "unsupported_operation"})
 	}
+}
+
+func validTransactionID(id string) bool {
+	if len(id) != 32 {
+		return false
+	}
+	for _, value := range id {
+		if !(value >= '0' && value <= '9') && !(value >= 'a' && value <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func decodeRequest(reader io.Reader) (Request, error) {
