@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"github.com/ASSever/debian-router-b5-2840/backend/internal/admin"
 	"github.com/ASSever/debian-router-b5-2840/backend/internal/authsession"
 	networkinventory "github.com/ASSever/debian-router-b5-2840/backend/internal/network"
+	"github.com/ASSever/debian-router-b5-2840/backend/internal/privilegedagent"
 )
 
 const sessionCookieName = "__Host-router_session"
@@ -44,8 +46,22 @@ func newAPIWithInterfaceReader(
 		db,
 		uiDirectory,
 		readNetworkInterfaces,
-		networkinventory.ReadDHCPStatus,
+		readDHCPStatusFromAgent,
 	)
+}
+
+func readDHCPStatusFromAgent(interfaceName string) (networkinventory.DHCPStatus, error) {
+	socketPath := os.Getenv("ROUTER_AGENT_SOCKET")
+	if socketPath == "" {
+		socketPath = privilegedagent.DefaultSocketPath()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	response, err := privilegedagent.SendDHCPStatus(ctx, socketPath, interfaceName)
+	if err != nil || response.Error != "" || response.DHCPStatus == nil {
+		return networkinventory.DHCPStatus{}, errors.New("read network status")
+	}
+	return *response.DHCPStatus, nil
 }
 
 func newAPIWithNetworkReaders(
