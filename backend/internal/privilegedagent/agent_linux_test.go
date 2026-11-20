@@ -88,9 +88,15 @@ func TestWrongPeerGIDIsRejected(t *testing.T) {
 	socketPath, stop := startTestServer(t, allowedGID)
 	defer stop()
 
-	response, err := SendRequest(context.Background(), socketPath, "status")
+	connection, err := net.DialTimeout("unix", socketPath, time.Second)
 	if err != nil {
 		t.Fatal(err)
+	}
+	defer connection.Close()
+
+	var response Response
+	if err := json.NewDecoder(connection).Decode(&response); err != nil {
+		t.Fatalf("read unauthorized peer response: %v", err)
 	}
 	if response.Error != "unauthorized" {
 		t.Fatalf("wrong GID response = %#v", response)
