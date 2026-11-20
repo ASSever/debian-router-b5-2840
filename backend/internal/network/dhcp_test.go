@@ -43,6 +43,7 @@ func TestReadDHCPStatusWithReportsLinkDownAndWaiting(t *testing.T) {
 		wantState string
 	}{
 		{name: "link down", payload: "{\"CarrierState\":\"no-carrier\"}", wantState: "link_down"},
+		{name: "administratively down", payload: "{\"CarrierState\":\"off\"}", wantState: "link_down"},
 		{name: "waiting", payload: "{\"CarrierState\":\"carrier\"}", wantState: "waiting"},
 	}
 	for _, test := range tests {
