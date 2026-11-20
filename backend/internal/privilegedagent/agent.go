@@ -28,12 +28,12 @@ type Request struct {
 	Operation string `json:"operation"`
 }
 
-// Response contains either the harmless status result or a stable error code.
+// Response contains harmless status data or a stable error code.
 type Response struct {
 	DHCPStatus *networkinventory.DHCPStatus
-	Status string `json:"status,omitempty"`
-	Agent  string `json:"agent,omitempty"`
-	Error  string `json:"error,omitempty"`
+	Status     string `json:"status,omitempty"`
+	Agent      string `json:"agent,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 // DefaultSocketPath returns the systemd-managed agent socket path.
