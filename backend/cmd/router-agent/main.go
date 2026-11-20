@@ -54,4 +54,3 @@ func run(arguments []string) error {
 	defer stop()
 	return privilegedagent.Serve(ctx, socketPath, uint32(allowedGID))
 }
-
