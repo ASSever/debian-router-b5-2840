@@ -21,8 +21,8 @@ import (
 const sessionCookieName = "__Host-router_session"
 
 type api struct {
-	db                   *sql.DB
-	now                  func() time.Time
+	db                    *sql.DB
+	now                   func() time.Time
 	readNetworkInterfaces func() ([]networkinventory.Interface, error)
 }
 
