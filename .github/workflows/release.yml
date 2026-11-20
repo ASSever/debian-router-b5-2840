@@ -35,7 +35,7 @@ jobs:
       - name: Name the release
         id: version
         shell: bash
-        run: echo "value=0.1.0-step12-$(TZ=Europe/Moscow date +%Y%m%d-%H%M)-r${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+        run: echo "value=0.1.0-step13-$(TZ=Europe/Moscow date +%Y%m%d-%H%M)-r${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
       - name: Build and verify the package
         env:
           VERSION: ${{ steps.version.outputs.value }}
@@ -52,4 +52,4 @@ jobs:
           mkdir release
           cp "dist/$VERSION/debian-router-b5-2840-$VERSION.tar.gz" release/router-api-linux-amd64.tar.gz
           (cd release && sha256sum router-api-linux-amd64.tar.gz > router-api-linux-amd64.tar.gz.sha256)
-          gh release create "v$VERSION" release/router-api-linux-amd64.tar.gz release/router-api-linux-amd64.tar.gz.sha256 --target "$GITHUB_SHA" --title "Stage 12 $VERSION" --notes "React status UI package from commit $GITHUB_SHA. The UI and HTTPS API are available from the documented Debian service." --latest
+          gh release create "v$VERSION" release/router-api-linux-amd64.tar.gz release/router-api-linux-amd64.tar.gz.sha256 --target "$GITHUB_SHA" --title "Stage 13 $VERSION" --notes "Privileged agent over a restricted Unix socket from commit $GITHUB_SHA. The agent accepts only its allowlisted status request from the router API service group." --latest

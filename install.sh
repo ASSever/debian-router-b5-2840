@@ -106,8 +106,14 @@ if [ "$mode" != --check ]; then
     ui_listing=$(printf '%s\n' "$package/" "$package/VERSION" "$package/router-api" \
         "$package/web/" "$package/web/assets/" "$package/web/assets/app.css" \
         "$package/web/assets/app.js" "$package/web/index.html" | sort)
+    agent_listing=$(printf '%s\n' "$package/" "$package/VERSION" "$package/router-api" \
+        "$package/router-agent" "$package/web/" "$package/web/assets/" \
+        "$package/web/assets/app.css" "$package/web/assets/app.js" \
+        "$package/web/index.html" | sort)
     actual_listing=$(tar -tzf "$stage/$archive" | sort)
+    has_agent=no
     case "$actual_listing" in
+        "$agent_listing") has_agent=yes; has_ui=yes ;;
         "$ui_listing") has_ui=yes ;;
         "$legacy_listing") has_ui=no ;;
         *)
@@ -133,10 +139,18 @@ if [ "$mode" != --check ]; then
         echo 'Invalid UI payload.' >&2
         exit 5
     fi
+    if [ "$has_agent" = yes ] && {
+        [ ! -f "$stage/$package/router-agent" ] || [ -L "$stage/$package/router-agent" ];
+    }; then
+        echo 'Invalid privileged-agent payload.' >&2
+        exit 5
+    fi
 
     prefix=/opt/debian-router-b5-2840
     release_dir=$prefix/releases/$package_version
     service=/etc/systemd/system/debian-router-api.service
+    agent_service=/etc/systemd/system/debian-router-agent.service
+    agent_current=$prefix/agent-current
     mkdir -p "$prefix/releases"
     previous_release=
     if [ -L "$prefix/current" ]; then
@@ -170,11 +184,21 @@ if [ "$mode" != --check ]; then
             echo 'Installed UI differs from verified release.' >&2
             exit 6
         fi
+        if [ "$has_agent" = yes ] && {
+            [ ! -f "$release_dir/router-agent" ] || [ -L "$release_dir/router-agent" ] ||
+            ! cmp -s "$stage/$package/router-agent" "$release_dir/router-agent";
+        }; then
+            echo 'Installed privileged-agent binary differs from verified release.' >&2
+            exit 6
+        fi
     else
         release_tmp=$prefix/releases/.new-$package_version-$$
         mkdir "$release_tmp"
         install -m 0755 "$stage/$package/router-api" "$release_tmp/router-api"
         printf '%s\n' "$package_version" > "$release_tmp/VERSION"
+        if [ "$has_agent" = yes ]; then
+            install -m 0755 "$stage/$package/router-agent" "$release_tmp/router-agent"
+        fi
         if [ "$has_ui" = yes ]; then
             mkdir -p "$release_tmp/web/assets"
             install -m 0644 "$stage/$package/web/index.html" "$release_tmp/web/index.html"
@@ -183,6 +207,56 @@ if [ "$mode" != --check ]; then
         fi
         mv -Tf "$release_tmp" "$release_dir"
         release_tmp=
+    fi
+
+    agent_gid=
+    if [ "$has_agent" = yes ]; then
+        for tool in getent groupadd; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+                printf 'Required tool is missing: %s\n' "$tool" >&2
+                exit 4
+            fi
+        done
+        agent_group_record=$(getent group debian-router-agent || :)
+        if [ -z "$agent_group_record" ]; then
+            groupadd --system debian-router-agent
+            agent_group_record=$(getent group debian-router-agent)
+        fi
+        agent_gid=$(printf '%s\n' "$agent_group_record" | cut -d: -f3)
+        agent_group_members=$(printf '%s\n' "$agent_group_record" | cut -d: -f4)
+        if ! printf '%s\n' "$agent_gid" | grep -Eq '^[0-9]+$' ||
+            [ "$agent_gid" = 0 ] ||
+            [ -n "$agent_group_members" ]; then
+            echo 'The dedicated agent group is invalid or has unrelated members.' >&2
+            exit 6
+        fi
+    fi
+
+    previous_agent_release=
+    if [ -L "$agent_current" ]; then
+        previous_agent_release=$(readlink "$agent_current")
+        if [ ! -x "$previous_agent_release/router-agent" ]; then
+            echo 'The current privileged-agent release is missing its binary.' >&2
+            exit 6
+        fi
+    elif [ -e "$agent_current" ]; then
+        echo 'The privileged-agent release path is not a symbolic link.' >&2
+        exit 6
+    fi
+    agent_release_changed=no
+    agent_unit_exists_before=no
+    agent_unit_changed=no
+    agent_was_active=no
+    agent_was_enabled=no
+    if [ -f "$agent_service" ]; then
+        agent_unit_exists_before=yes
+        cp -p "$agent_service" "$stage/previous-agent.service"
+        if systemctl is-active --quiet debian-router-agent.service; then
+            agent_was_active=yes
+        fi
+        if systemctl is-enabled --quiet debian-router-agent.service; then
+            agent_was_enabled=yes
+        fi
     fi
 
     case "$package_version" in
@@ -226,7 +300,36 @@ if [ "$mode" != --check ]; then
     esac
 
     unit_tmp=$stage/debian-router-api.service
-    cat > "$unit_tmp" <<'EOF'
+    if [ "$has_agent" = yes ]; then
+        cat > "$unit_tmp" <<'EOF'
+[Unit]
+Description=Debian Router API
+After=network.target debian-router-agent.service
+Requires=debian-router-agent.service
+
+[Service]
+Type=simple
+DynamicUser=yes
+Group=debian-router-agent
+StateDirectory=debian-router-b5-2840
+StateDirectoryMode=0700
+UMask=0077
+Environment=ROUTER_UI_DIR=/opt/debian-router-b5-2840/current/web
+Environment=ROUTER_AGENT_SOCKET=/run/debian-router-agent/agent.sock
+ExecStartPre=/opt/debian-router-b5-2840/current/router-agent request status
+ExecStart=/opt/debian-router-b5-2840/current/router-api
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    else
+        cat > "$unit_tmp" <<'EOF'
 [Unit]
 Description=Debian Router API
 After=network.target
@@ -249,6 +352,7 @@ PrivateTmp=yes
 [Install]
 WantedBy=multi-user.target
 EOF
+    fi
     if [ ! -f "$service" ] || ! cmp -s "$unit_tmp" "$service"; then
         unit_changed=yes
         if [ -f "$service" ]; then
@@ -256,24 +360,68 @@ EOF
         fi
         install -m 0644 "$unit_tmp" "$service.new.$$"
         mv -Tf "$service.new.$$" "$service"
-        systemctl daemon-reload
     else
         unit_changed=no
     fi
-    if [ "$previous_release" != "$release_dir" ]; then
-        ln -s "$release_dir" "$prefix/current.new.$$"
-        mv -Tf "$prefix/current.new.$$" "$prefix/current"
+
+    if [ "$has_agent" = yes ]; then
+        agent_unit_tmp=$stage/debian-router-agent.service
+        cat > "$agent_unit_tmp" <<EOF
+[Unit]
+Description=Debian Router Privileged Agent
+After=local-fs.target
+
+[Service]
+Type=simple
+User=root
+Group=debian-router-agent
+RuntimeDirectory=debian-router-agent
+RuntimeDirectoryMode=0750
+UMask=0077
+Environment=ROUTER_AGENT_SOCKET=/run/debian-router-agent/agent.sock
+Environment=ROUTER_AGENT_ALLOWED_GID=$agent_gid
+ExecStart=$agent_current/router-agent
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        if [ ! -f "$agent_service" ] || ! cmp -s "$agent_unit_tmp" "$agent_service"; then
+            agent_unit_changed=yes
+            install -m 0644 "$agent_unit_tmp" "$agent_service.new.$$"
+            mv -Tf "$agent_service.new.$$" "$agent_service"
+        fi
+        if [ "$previous_agent_release" != "$release_dir" ]; then
+            ln -s "$release_dir" "$agent_current.new.$$"
+            mv -Tf "$agent_current.new.$$" "$agent_current"
+            agent_release_changed=yes
+        fi
     fi
-    systemctl enable debian-router-api.service
-    if [ "$previous_release" = "$release_dir" ] && [ "$unit_changed" = no ]; then
-        systemctl start debian-router-api.service
-    elif ! systemctl restart debian-router-api.service ||
-        { sleep 1; ! systemctl is-active --quiet debian-router-api.service; }; then
+
+    rollback_install() {
         if [ -n "$previous_release" ]; then
             ln -s "$previous_release" "$prefix/current.rollback.$$"
             mv -Tf "$prefix/current.rollback.$$" "$prefix/current"
         else
             rm -f -- "$prefix/current"
+        fi
+        if [ "$agent_release_changed" = yes ]; then
+            if [ -n "$previous_agent_release" ]; then
+                ln -s "$previous_agent_release" "$agent_current.rollback.$$"
+                mv -Tf "$agent_current.rollback.$$" "$agent_current"
+            else
+                rm -f -- "$agent_current"
+            fi
         fi
         if [ "$unit_changed" = yes ]; then
             if [ -f "$stage/previous.service" ]; then
@@ -282,18 +430,102 @@ EOF
             else
                 rm -f -- "$service"
             fi
-            systemctl daemon-reload
+        fi
+        if [ "$agent_unit_changed" = yes ] && [ "$agent_unit_exists_before" = yes ]; then
+            cp -p "$stage/previous-agent.service" "$agent_service.new.$$"
+            mv -Tf "$agent_service.new.$$" "$agent_service"
+        elif [ "$agent_unit_changed" = yes ]; then
+            rm -f -- "$agent_service"
+        fi
+        systemctl daemon-reload || :
+        if [ "$agent_unit_exists_before" = yes ]; then
+            if [ "$agent_was_enabled" = yes ]; then
+                systemctl enable debian-router-agent.service || :
+            else
+                systemctl disable debian-router-agent.service || :
+            fi
+            if [ "$agent_was_active" = yes ]; then
+                systemctl restart debian-router-agent.service || :
+            else
+                systemctl stop debian-router-agent.service || :
+            fi
+        elif [ "$agent_unit_changed" = yes ]; then
+            systemctl disable --now debian-router-agent.service || :
+            rm -f -- "$agent_service"
+            systemctl daemon-reload || :
         fi
         if [ -n "$previous_release" ]; then
             systemctl restart debian-router-api.service || :
         else
             systemctl disable --now debian-router-api.service || :
         fi
+    }
+
+    if [ "$previous_release" != "$release_dir" ]; then
+        ln -s "$release_dir" "$prefix/current.new.$$"
+        mv -Tf "$prefix/current.new.$$" "$prefix/current"
+    fi
+
+    if [ "$unit_changed" = yes ] || [ "$agent_unit_changed" = yes ]; then
+        if ! systemctl daemon-reload; then
+            rollback_install
+            echo 'Could not reload systemd units; the previous release was restored.' >&2
+            exit 7
+        fi
+    fi
+    if [ "$has_agent" = yes ]; then
+        if ! systemctl enable debian-router-agent.service; then
+            rollback_install
+            echo 'Could not enable the privileged agent; the previous release was restored.' >&2
+            exit 7
+        fi
+        if [ "$previous_agent_release" != "$release_dir" ] ||
+            [ "$agent_unit_changed" = yes ]; then
+            if ! systemctl restart debian-router-agent.service ||
+                { sleep 1; ! systemctl is-active --quiet debian-router-agent.service; }; then
+                rollback_install
+                echo 'Privileged agent startup failed; the previous release was restored.' >&2
+                exit 7
+            fi
+        elif ! systemctl start debian-router-agent.service; then
+            rollback_install
+            echo 'Privileged agent could not be started; the previous release was restored.' >&2
+            exit 7
+        fi
+    fi
+    if ! systemctl enable debian-router-api.service; then
+        rollback_install
+        echo 'Could not enable the API; the previous release was restored.' >&2
+        exit 7
+    fi
+    if [ "$previous_release" = "$release_dir" ] && [ "$unit_changed" = no ]; then
+        if ! systemctl start debian-router-api.service ||
+            ! systemctl is-active --quiet debian-router-api.service; then
+            rollback_install
+            echo 'API start failed; the previous release was restored.' >&2
+            exit 7
+        fi
+    elif ! systemctl restart debian-router-api.service ||
+        { sleep 1; ! systemctl is-active --quiet debian-router-api.service; }; then
+        rollback_install
         echo 'API startup failed; the previous release was restored.' >&2
         exit 7
     fi
-    systemctl is-active --quiet debian-router-api.service
+    if ! systemctl is-active --quiet debian-router-api.service; then
+        rollback_install
+        echo 'API became inactive; the previous release was restored.' >&2
+        exit 7
+    fi
+    if [ "$has_agent" = no ] && [ "$agent_unit_exists_before" = yes ]; then
+        if systemctl disable --now debian-router-agent.service; then
+            rm -f -- "$agent_service" "$agent_current"
+            systemctl daemon-reload
+        fi
+    fi
     printf 'Installed API release: %s\n' "$package_version"
+    if [ "$has_agent" = yes ]; then
+        printf 'Privileged agent: active, socket %s\n' '/run/debian-router-agent/agent.sock'
+    fi
     printf '%s\n' 'Local health endpoint: https://127.0.0.1:8081/healthz'
     printf '%s\n' 'Local UI: https://127.0.0.1:8081/'
     exit 0

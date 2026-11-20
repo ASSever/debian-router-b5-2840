@@ -29,7 +29,7 @@ jobs:
       - name: Check Go formatting
         working-directory: backend
         run: |
-          unformatted=$(gofmt -l cmd/router-api/*.go internal/admin/admin.go internal/admin/admin_test.go internal/authsession/*.go internal/database/database.go internal/database/database_test.go)
+          unformatted=$(gofmt -l cmd/router-api/*.go cmd/router-agent/*.go internal/privilegedagent/*.go internal/admin/admin.go internal/admin/admin_test.go internal/authsession/*.go internal/database/database.go internal/database/database_test.go)
           if [ -n "$unformatted" ]; then
             printf 'Go files need gofmt:\n%s\n' "$unformatted"
             gofmt -d $unformatted
@@ -41,7 +41,7 @@ jobs:
       - name: Name the package
         id: version
         shell: bash
-        run: echo "value=0.1.0-step12-$(TZ=Europe/Moscow date +%Y%m%d-%H%M)-r${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+        run: echo "value=0.1.0-step13-$(TZ=Europe/Moscow date +%Y%m%d-%H%M)-r${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
       - name: Build and verify the release package
         env:
           VERSION: ${{ steps.version.outputs.value }}
