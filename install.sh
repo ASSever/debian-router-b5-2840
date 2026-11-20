@@ -255,7 +255,7 @@ EOF
     fi
     systemctl is-active --quiet debian-router-api.service
     printf 'Installed API release: %s\n' "$package_version"
-    printf '%s\n' 'Local health endpoint: http://127.0.0.1:8081/healthz'
+    printf '%s\n' 'Local health endpoint: https://127.0.0.1:8081/healthz'
     exit 0
 fi
 

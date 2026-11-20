@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ASSever/debian-router-b5-2840/backend/internal/authsession"
 	"github.com/ASSever/debian-router-b5-2840/backend/internal/database"
 )
 
@@ -112,5 +114,27 @@ func TestMissingAdministrator(t *testing.T) {
 	}
 	if _, err := Initialize(context.Background(), db, nil); err == nil {
 		t.Fatal("expected missing presenter to fail")
+	}
+}
+
+func TestResetRevokesSessions(t *testing.T) {
+	db, err := database.Open(filepath.Join(t.TempDir(), "router.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	if _, err := Initialize(ctx, db, func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	token, err := authsession.Create(ctx, db, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Reset(ctx, db, func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if valid, err := authsession.Valid(ctx, db, token, time.Now()); err != nil || valid {
+		t.Fatalf("session after password reset = %t, err=%v", valid, err)
 	}
 }
