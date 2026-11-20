@@ -8,10 +8,13 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	networkinventory "github.com/ASSever/debian-router-b5-2840/backend/internal/network"
 )
 
 func TestAllowedStatusRequest(t *testing.T) {
@@ -24,6 +27,57 @@ func TestAllowedStatusRequest(t *testing.T) {
 	}
 	if response != (Response{Status: "ok", Agent: "ready"}) {
 		t.Fatalf("status response = %#v", response)
+	}
+}
+
+func TestAllowedDHCPStatusRequestReturnsFilteredStatus(t *testing.T) {
+	status := networkinventory.DHCPStatus{
+		Interface:  "enp1s0",
+		LinkState:  "carrier",
+		LeaseState: "leased",
+		Addresses:  []string{"192.0.2.10/24"},
+		Gateway:    "192.0.2.1",
+		DNS:        []string{"192.0.2.53"},
+	}
+	socketPath, stop := startTestServerWithDHCPReader(
+		t,
+		uint32(syscall.Getgid()),
+		func(name string) (networkinventory.DHCPStatus, error) {
+			if name != "enp1s0" {
+				t.Fatalf("interface = %q, want enp1s0", name)
+			}
+			return status, nil
+		},
+	)
+	defer stop()
+
+	response, err := SendDHCPStatus(context.Background(), socketPath, "enp1s0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.DHCPStatus == nil || !reflect.DeepEqual(*response.DHCPStatus, status) {
+		t.Fatalf("DHCP response = %#v, want %#v", response.DHCPStatus, status)
+	}
+}
+
+func TestDHCPStatusRequestRejectsInvalidInterface(t *testing.T) {
+	called := false
+	socketPath, stop := startTestServerWithDHCPReader(
+		t,
+		uint32(syscall.Getgid()),
+		func(string) (networkinventory.DHCPStatus, error) {
+			called = true
+			return networkinventory.DHCPStatus{}, nil
+		},
+	)
+	defer stop()
+
+	response, err := SendDHCPStatus(context.Background(), socketPath, "../enp1s0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Error != "invalid_request" || called {
+		t.Fatalf("response = %#v, reader called = %t; want invalid request and no reader call", response, called)
 	}
 }
 
@@ -135,12 +189,20 @@ func TestServerRemovesSocketOnShutdown(t *testing.T) {
 }
 
 func startTestServer(t *testing.T, allowedGID uint32) (string, func()) {
+	return startTestServerWithDHCPReader(t, allowedGID, networkinventory.ReadDHCPStatus)
+}
+
+func startTestServerWithDHCPReader(
+	t *testing.T,
+	allowedGID uint32,
+	readDHCPStatus func(string) (networkinventory.DHCPStatus, error),
+) (string, func()) {
 	t.Helper()
 	socketPath := filepath.Join(t.TempDir(), "agent.sock")
 	ctx, cancel := context.WithCancel(context.Background())
 	serverDone := make(chan error, 1)
 	go func() {
-		serverDone <- Serve(ctx, socketPath, allowedGID)
+		serverDone <- serveWithDHCPReader(ctx, socketPath, allowedGID, readDHCPStatus)
 	}()
 
 	deadline := time.Now().Add(time.Second)

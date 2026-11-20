@@ -11,6 +11,8 @@ import (
 	"os"
 	"syscall"
 	"time"
+
+	networkinventory "github.com/ASSever/debian-router-b5-2840/backend/internal/network"
 )
 
 const (
@@ -22,11 +24,13 @@ const (
 
 // Request is the only message accepted by the privileged agent.
 type Request struct {
+	Interface string
 	Operation string `json:"operation"`
 }
 
 // Response contains either the harmless status result or a stable error code.
 type Response struct {
+	DHCPStatus *networkinventory.DHCPStatus
 	Status string `json:"status,omitempty"`
 	Agent  string `json:"agent,omitempty"`
 	Error  string `json:"error,omitempty"`
@@ -39,6 +43,15 @@ func DefaultSocketPath() string {
 
 // Serve accepts bounded requests from peers whose primary GID is allowedGID.
 func Serve(ctx context.Context, socketPath string, allowedGID uint32) error {
+	return serveWithDHCPReader(ctx, socketPath, allowedGID, networkinventory.ReadDHCPStatus)
+}
+
+func serveWithDHCPReader(
+	ctx context.Context,
+	socketPath string,
+	allowedGID uint32,
+	readDHCPStatus func(string) (networkinventory.DHCPStatus, error),
+) error {
 	if socketPath == "" {
 		return errors.New("agent socket path is empty")
 	}
@@ -80,12 +93,24 @@ func Serve(ctx context.Context, socketPath string, allowedGID uint32) error {
 			}
 			return fmt.Errorf("accept privileged agent connection: %w", err)
 		}
-		handleConnection(connection, allowedGID)
+		handleConnection(connection, allowedGID, readDHCPStatus)
 	}
 }
 
 // SendRequest connects to the agent and sends one operation request.
 func SendRequest(ctx context.Context, socketPath, operation string) (Response, error) {
+	return sendRequest(ctx, socketPath, Request{Operation: operation})
+}
+
+// SendDHCPStatus requests a filtered, read-only DHCP view for one interface.
+func SendDHCPStatus(ctx context.Context, socketPath, interfaceName string) (Response, error) {
+	return sendRequest(ctx, socketPath, Request{
+		Operation: "dhcp-status",
+		Interface: interfaceName,
+	})
+}
+
+func sendRequest(ctx context.Context, socketPath string, request Request) (Response, error) {
 	var empty Response
 	connection, err := dialAgent(ctx, socketPath)
 	if err != nil {
@@ -97,7 +122,7 @@ func SendRequest(ctx context.Context, socketPath, operation string) (Response, e
 	}
 
 	encoder := json.NewEncoder(connection)
-	if err := encoder.Encode(Request{Operation: operation}); err != nil {
+	if err := encoder.Encode(request); err != nil {
 		return empty, fmt.Errorf("send privileged agent request: %w", err)
 	}
 	if unixConnection, ok := connection.(*net.UnixConn); ok {
@@ -152,7 +177,11 @@ func dialAgent(ctx context.Context, socketPath string) (net.Conn, error) {
 	}
 }
 
-func handleConnection(connection net.Conn, allowedGID uint32) {
+func handleConnection(
+	connection net.Conn,
+	allowedGID uint32,
+	readDHCPStatus func(string) (networkinventory.DHCPStatus, error),
+) {
 	defer connection.Close()
 	_ = connection.SetDeadline(time.Now().Add(connectionTimeout))
 
@@ -172,11 +201,27 @@ func handleConnection(connection net.Conn, allowedGID uint32) {
 		writeResponse(connection, Response{Error: "invalid_request"})
 		return
 	}
-	if request.Operation != "status" {
+	switch request.Operation {
+	case "status":
+		if request.Interface != "" {
+			writeResponse(connection, Response{Error: "invalid_request"})
+			return
+		}
+		writeResponse(connection, Response{Status: "ok", Agent: "ready"})
+	case "dhcp-status":
+		if !networkinventory.ValidInterfaceName(request.Interface) {
+			writeResponse(connection, Response{Error: "invalid_request"})
+			return
+		}
+		status, err := readDHCPStatus(request.Interface)
+		if err != nil {
+			writeResponse(connection, Response{Error: "network_status_unavailable"})
+			return
+		}
+		writeResponse(connection, Response{DHCPStatus: &status})
+	default:
 		writeResponse(connection, Response{Error: "unsupported_operation"})
-		return
 	}
-	writeResponse(connection, Response{Status: "ok", Agent: "ready"})
 }
 
 func decodeRequest(reader io.Reader) (Request, error) {
