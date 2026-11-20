@@ -50,11 +50,15 @@ install -m 0644 "$ui_dist/assets/app.css" "$stage/$package/web/assets/app.css"
 (cd "$repo/backend" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
     go build -trimpath -buildvcs=false -ldflags=-buildid= \
     -o "$stage/$package/router-api" ./cmd/router-api)
+(cd "$repo/backend" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+    go build -trimpath -buildvcs=false -ldflags=-buildid= \
+    -o "$stage/$package/router-agent" ./cmd/router-agent)
 
 tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
     -C "$stage" -cf "$stage/$package.tar" "$package"
 gzip -n "$stage/$package.tar"
 expected_listing=$(printf '%s\n' "$package/" "$package/VERSION" "$package/router-api" \
+    "$package/router-agent" \
     "$package/web/" "$package/web/assets/" "$package/web/assets/app.css" \
     "$package/web/assets/app.js" "$package/web/index.html" | sort)
 if [ "$(tar -tzf "$stage/$package.tar.gz" | sort)" != "$expected_listing" ]; then
