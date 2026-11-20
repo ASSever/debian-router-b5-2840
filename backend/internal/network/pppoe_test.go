@@ -143,10 +143,11 @@ func TestPPPoEValidationAndStatusHideCredentials(t *testing.T) {
 		}
 	}
 	var commands []string
+	journalOutput := "Timeout waiting for PADO packets. password secret-value"
 	run := pppoeCommandStub(&commands)
 	manager, _, activePath := pppoeTestManager(t, func(ctx context.Context, path string, args ...string) (string, error) {
 		if strings.Contains(path, "journalctl") {
-			return "Timeout waiting for PADO packets. password secret-value", nil
+			return journalOutput, nil
 		}
 		return run(ctx, path, args...)
 	}, func() (string, string, error) { return "", "", ErrPPPoENotConnected })
@@ -163,6 +164,11 @@ func TestPPPoEValidationAndStatusHideCredentials(t *testing.T) {
 	encoded, _ := json.Marshal(status)
 	if strings.Contains(string(encoded), "secret-value") {
 		t.Fatal("status leaked password")
+	}
+	journalOutput = "PAP authentication failed\nConnection terminated."
+	status, err = manager.Status()
+	if err != nil || status.State != "auth_failed" {
+		t.Fatalf("authentication status = %#v, %v", status, err)
 	}
 }
 

@@ -305,6 +305,9 @@ func (m *PPPoEManager) restore(ctx context.Context, directory string) error {
 	if _, err := m.run(ctx, "/usr/bin/systemctl", "--system", "stop", pppoeService); err != nil {
 		return errors.New("stop PPPoE service")
 	}
+	// pppd may exit nonzero after SIGTERM even when systemctl stop succeeds.
+	// Clear that stale failure so the restored DHCP mode reports PPPoE inactive.
+	_, _ = m.run(ctx, "/usr/bin/systemctl", "--system", "reset-failed", pppoeService)
 	if backup.OriginalExists {
 		original, exists, _, err := readStaticWANFile(filepath.Join(directory, "original"))
 		if err != nil || !exists {
@@ -381,15 +384,24 @@ func (m *PPPoEManager) Status() (PPPoEStatus, error) {
 	journal, err := m.run(context.Background(), "/usr/bin/journalctl", "--unit="+pppoeService,
 		"--since="+info.ModTime().UTC().Format("2006-01-02 15:04:05 UTC"), "--lines=30", "--no-pager", "--output=cat")
 	if err == nil {
+		var authFailed, noPeer, reconnecting bool
 		for _, line := range strings.Split(strings.ToLower(journal), "\n") {
 			switch {
 			case strings.Contains(line, "authentication failed"):
-				result.State = "auth_failed"
+				authFailed = true
 			case strings.Contains(line, "timeout waiting for pado"), strings.Contains(line, "no pppoe access concentrator"), strings.Contains(line, "no response to padi"):
-				result.State = "no_peer"
+				noPeer = true
 			case strings.Contains(line, "connection terminated"), strings.Contains(line, "modem hangup"):
-				result.State = "reconnecting"
+				reconnecting = true
 			}
+		}
+		switch {
+		case authFailed:
+			result.State = "auth_failed"
+		case noPeer:
+			result.State = "no_peer"
+		case reconnecting:
+			result.State = "reconnecting"
 		}
 	}
 	return result, nil
