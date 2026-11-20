@@ -42,6 +42,7 @@ stage=$(mktemp -d "$output_dir/.package.XXXXXXXX")
 trap 'rm -r -- "$stage"' EXIT HUP INT TERM
 mkdir "$stage/$package"
 printf '%s\n' "$version" > "$stage/$package/VERSION"
+printf '%s\n' 'pppd' > "$stage/$package/PPPOE_SUPPORT"
 mkdir -p "$stage/$package/web/assets"
 install -m 0644 "$ui_dist/index.html" "$stage/$package/web/index.html"
 install -m 0644 "$ui_dist/assets/app.js" "$stage/$package/web/assets/app.js"
@@ -57,7 +58,7 @@ install -m 0644 "$ui_dist/assets/app.css" "$stage/$package/web/assets/app.css"
 tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
     -C "$stage" -cf "$stage/$package.tar" "$package"
 gzip -n "$stage/$package.tar"
-expected_listing=$(printf '%s\n' "$package/" "$package/VERSION" "$package/router-api" \
+expected_listing=$(printf '%s\n' "$package/" "$package/VERSION" "$package/PPPOE_SUPPORT" "$package/router-api" \
     "$package/router-agent" \
     "$package/web/" "$package/web/assets/" "$package/web/assets/app.css" \
     "$package/web/assets/app.js" "$package/web/index.html" | sort)

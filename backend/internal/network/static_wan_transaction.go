@@ -101,12 +101,19 @@ func (m *StaticWANManager) Apply(ctx context.Context, config StaticWANConfig) (S
 	}
 
 	var transaction StaticWANTransaction
-	err = withFileLock(filepath.Join(m.statePath, ".lock"), func() error {
+	err = withFileLock(wanLockPath(m.statePath), func() error {
 		pending, err := m.hasPendingTransaction()
 		if err != nil {
 			return err
 		}
 		if pending {
+			return ErrStaticWANPending
+		}
+		otherMode, err := pppoeModeBusy(filepath.Dir(m.statePath))
+		if err != nil {
+			return err
+		}
+		if otherMode {
 			return ErrStaticWANPending
 		}
 		transaction, err = m.startTransaction(ctx, config)
@@ -123,7 +130,7 @@ func (m *StaticWANManager) Confirm(ctx context.Context, id string) error {
 	if !validStaticWANTransactionID(id) {
 		return ErrStaticWANTransaction
 	}
-	return withFileLock(filepath.Join(m.statePath, ".lock"), func() error {
+	return withFileLock(wanLockPath(m.statePath), func() error {
 		directory, record, err := m.loadTransaction(id)
 		if err != nil {
 			return err
@@ -251,7 +258,7 @@ func (m *StaticWANManager) startTransaction(ctx context.Context, config StaticWA
 }
 
 func (m *StaticWANManager) rollback(ctx context.Context, id string, fromTimer bool) error {
-	return withFileLock(filepath.Join(m.statePath, ".lock"), func() error {
+	return withFileLock(wanLockPath(m.statePath), func() error {
 		directory, err := m.transactionDirectory(id)
 		if err != nil {
 			return err

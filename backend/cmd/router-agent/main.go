@@ -55,8 +55,20 @@ func run(arguments []string) error {
 		defer cancel()
 		return manager.RollbackFromTimer(ctx, arguments[1])
 	}
+	if len(arguments) == 2 && arguments[0] == "rollback-pppoe" {
+		if os.Geteuid() != 0 {
+			return errors.New("WAN rollback requires root")
+		}
+		manager, err := network.NewPPPoEManager()
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		return manager.RollbackFromTimer(ctx, arguments[1])
+	}
 	if len(arguments) != 0 {
-		return errors.New("usage: router-agent [request OPERATION | rollback TRANSACTION_ID]")
+		return errors.New("usage: router-agent [request OPERATION | rollback TRANSACTION_ID | rollback-pppoe TRANSACTION_ID]")
 	}
 
 	allowedGIDText := os.Getenv("ROUTER_AGENT_ALLOWED_GID")
