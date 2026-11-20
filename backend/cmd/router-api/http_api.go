@@ -87,12 +87,12 @@ func (a *api) networkDHCPStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"interface":  status.Interface,
-		"link_state": status.LinkState,
+		"interface":   status.Interface,
+		"link_state":  status.LinkState,
 		"lease_state": status.LeaseState,
-		"addresses":  status.Addresses,
-		"gateway":    status.Gateway,
-		"dns":        status.DNS,
+		"addresses":   status.Addresses,
+		"gateway":     status.Gateway,
+		"dns":         status.DNS,
 	})
 }
 

@@ -81,11 +81,11 @@ func ReadDHCPStatusWith(
 	}
 
 	result := DHCPStatus{
-		Interface: interfaceName,
-		LinkState: status.CarrierState,
+		Interface:  interfaceName,
+		LinkState:  status.CarrierState,
 		LeaseState: "waiting",
-		Addresses: []string{},
-		DNS: []string{},
+		Addresses:  []string{},
+		DNS:        []string{},
 	}
 	if status.DHCPv4Client != nil && status.DHCPv4Client.Lease != nil {
 		result.LeaseState = "leased"
