@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import WANLinePanel from "./WANLinePanel";
 import LANPanel from "./LANPanel";
 import DHCPReservationsPanel from "./DHCPReservationsPanel";
+import LANDNSPanel from "./LANDNSPanel";
 
 const REQUEST_TIMEOUT_MS = 25_000;
 
@@ -552,6 +553,7 @@ export default function StaticWANPanel() {
           <WANLinePanel />
           <LANPanel />
           <DHCPReservationsPanel />
+          <LANDNSPanel />
         </>
       )}
 

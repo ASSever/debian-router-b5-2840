@@ -231,6 +231,13 @@ func (m *StaticWANManager) ApplyLAN(ctx context.Context, config LANConfig) (Stat
 				return ErrReservationConflict
 			}
 		}
+		dnsConfig, err := m.readLANDNS()
+		if err != nil {
+			return err
+		}
+		if lanUsesDNSAddress(config, dnsConfig) {
+			return ErrInvalidLANDNS
+		}
 		data, exists, _, err := readStaticWANFile(m.lanPath())
 		if err != nil {
 			return err
@@ -372,10 +379,10 @@ func (m *StaticWANManager) lanNetAdmin(ctx context.Context, argv ...string) erro
 	return err
 }
 
-func renderLANFirewall(config LANConfig) []byte {
+func renderLANFirewall(config LANConfig, routerOnly bool) []byte {
 	prefix := netip.MustParsePrefix(config.Address)
 	address, subnet := prefix.Addr(), prefix.Masked()
-	return fmt.Appendf(nil, `destroy table inet %s
+	rules := fmt.Appendf(nil, `destroy table inet %s
 table inet %s {
  chain input {
   type filter hook input priority -10; policy accept;
@@ -384,11 +391,25 @@ table inet %s {
   ip daddr %s tcp dport { 53, %s } counter drop
   ip daddr %s udp dport 53 counter drop
  }
-}
 `, lanTable, lanTable, address, LANPort, LANInterface, subnet, address, LANInterface, subnet, address, LANPort, address)
+	if routerOnly {
+		rules = fmt.Appendf(rules, " chain forward {\n  type filter hook forward priority -10; policy accept;\n  iifname \"%s\" meta l4proto { tcp, udp } th dport 53 counter drop\n }\n", LANInterface)
+	}
+	return append(rules, "}\n"...)
 }
 
 func (m *StaticWANManager) syncLAN(ctx context.Context, config *LANConfig, reconfigure bool) error {
+	var dnsConfig LANDNSConfig
+	if config != nil {
+		var err error
+		dnsConfig, err = m.readLANDNS()
+		if err != nil {
+			return err
+		}
+		if lanUsesDNSAddress(*config, dnsConfig) {
+			return ErrInvalidLANDNS
+		}
+	}
 	load, err := m.run(ctx, "/usr/bin/systemctl", "--system", "show", "--property=LoadState", "--value", lanDNSUnit)
 	if err != nil {
 		return err
@@ -410,7 +431,7 @@ func (m *StaticWANManager) syncLAN(ctx context.Context, config *LANConfig, recon
 			return err
 		}
 	} else {
-		if err := writeAtomicFile(rules, renderLANFirewall(*config), 0600); err != nil {
+		if err := writeAtomicFile(rules, renderLANFirewall(*config, dnsConfig.RouterOnly), 0600); err != nil {
 			return err
 		}
 		if err := m.lanNetAdmin(ctx, "/usr/sbin/nft", "-f", rules); err != nil {
@@ -441,6 +462,7 @@ func (m *StaticWANManager) syncLAN(ctx context.Context, config *LANConfig, recon
 	content := fmt.Appendf(nil, "interface=%s\nexcept-interface=lo\nbind-dynamic\nuser=nobody\ngroup=nogroup\nlocal=/%s/\nhost-record=%s,%s\ndhcp-authoritative\ndhcp-range=%s,%s,12h\ndhcp-option=option:router,%s\ndhcp-option=option:dns-server,%s\ndhcp-leasefile=/var/lib/debian-router-lan/leases/dnsmasq.leases\n",
 		LANInterface, LANHostname, LANHostname, address, config.PoolStart, config.PoolEnd, address, address)
 	content = fmt.Appendf(content, "dhcp-hostsfile=%s\n", hosts)
+	content = appendLANDNS(content, dnsConfig)
 	if err := writeAtomicFile(dns, content, 0600); err != nil {
 		return err
 	}

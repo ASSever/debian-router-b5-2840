@@ -156,17 +156,13 @@ func (m *StaticWANManager) ChangeDHCPReservation(ctx context.Context, change Res
 		if err := writeAtomicFile(path, []byte(content.String()), 0644); err != nil {
 			return err
 		}
-		reload := func(ctx context.Context) error {
-			_, err := m.run(ctx, "/usr/bin/systemctl", "--system", "kill", "--signal=HUP", "--kill-whom=main", lanDNSUnit)
-			return err
-		}
-		if err := reload(ctx); err != nil {
+		if err := m.reloadLANDNS(ctx); err != nil {
 			if restoreErr := writeAtomicFile(path, previous, 0644); restoreErr != nil {
 				return errors.Join(err, restoreErr)
 			}
 			restoreCtx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 			defer cancel()
-			return errors.Join(err, reload(restoreCtx))
+			return errors.Join(err, m.reloadLANDNS(restoreCtx))
 		}
 		return nil
 	})
