@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import ProxyRoutingPanel from "./ProxyRoutingPanel";
 
 const endpoint = "/api/proxy/subscription";
 const reasons: Record<string, string> = {
@@ -226,6 +227,7 @@ export default function ProxySubscriptionPanel() {
           </ul>
         </div>
       )}
+      <ProxyRoutingPanel subscriptionID={report?.id ?? ""} />
     </section>
   );
 }

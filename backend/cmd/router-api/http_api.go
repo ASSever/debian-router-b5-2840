@@ -153,6 +153,8 @@ func newAPIWithNetworkOperations(
 	mux.HandleFunc("GET /api/proxy/subscription", a.readProxySubscription)
 	mux.HandleFunc("POST /api/proxy/subscription", a.importProxySubscription)
 	mux.HandleFunc("POST /api/proxy/subscription/check", a.checkProxyServer)
+	mux.HandleFunc("GET /api/proxy/profile", a.proxyProfile)
+	mux.HandleFunc("PUT /api/proxy/profile", a.proxyProfile)
 	mux.HandleFunc("POST /api/auth/login", a.login)
 	mux.HandleFunc("GET /api/auth/session", a.sessionStatus)
 	mux.HandleFunc("DELETE /api/auth/session", a.logout)

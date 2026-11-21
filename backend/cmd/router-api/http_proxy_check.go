@@ -4,15 +4,9 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
-	"regexp"
-	"strings"
 
 	"github.com/ASSever/debian-router-b5-2840/backend/internal/proxy"
 )
-
-var singBoxVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 
 func (a *api) checkProxyServer(w http.ResponseWriter, r *http.Request) {
 	if !sameOrigin(r) {
@@ -44,21 +38,8 @@ func (a *api) checkProxyServer(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "subscription_storage_failed"})
 	default:
-		result := proxy.CheckServer(r.Context(), installedSingBox(), server)
+		result := proxy.CheckServer(r.Context(), proxy.InstalledSingBox(), server)
 		log.Printf("proxy server check: line=%d status=%s reason=%s elapsed_ms=%d", result.Line, result.Status, result.Reason, result.ElapsedMS)
 		writeJSON(w, http.StatusOK, result)
 	}
-}
-
-func installedSingBox() string {
-	const prefix = "/opt/debian-router-b5-2840"
-	marker, err := os.ReadFile(filepath.Join(prefix, "current", "SING_BOX_SUPPORT"))
-	if err != nil {
-		return ""
-	}
-	version, _, _ := strings.Cut(string(marker), "\n")
-	if !singBoxVersion.MatchString(version) {
-		return ""
-	}
-	return filepath.Join(prefix, "sing-box", version, "sing-box")
 }
