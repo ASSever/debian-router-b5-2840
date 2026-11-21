@@ -38,11 +38,13 @@ type StaticWANTransaction struct {
 
 type staticWANRecord struct {
 	Config StaticWANConfig `json:"config"`
+	Line   *wanLineProfile `json:"line,omitempty"`
 }
 
 type staticWANBackup struct {
-	OriginalExists bool   `json:"original_exists"`
-	OriginalMode   uint32 `json:"original_mode"`
+	OriginalExists bool            `json:"original_exists"`
+	OriginalMode   uint32          `json:"original_mode"`
+	Line           *wanLineProfile `json:"line,omitempty"`
 }
 
 // StaticWANManager applies only to enp1s0 and keeps an exact rollback copy.
@@ -89,9 +91,24 @@ func newStaticWANManagerForTest(configPath, statePath string, run commandRunner,
 
 // Apply writes the profile only after a rollback timer is confirmed active.
 func (m *StaticWANManager) Apply(ctx context.Context, config StaticWANConfig) (StaticWANTransaction, error) {
-	if err := ValidateStaticWAN(config); err != nil {
+	content, err := RenderStaticWAN(config)
+	if err != nil {
 		return StaticWANTransaction{}, err
 	}
+	return m.applyWANChange(func() (StaticWANTransaction, error) {
+		if active, err := wanLineActive(m.configPath); err != nil || active {
+			return StaticWANTransaction{}, ErrStaticWANPending
+		}
+		return m.startTransaction(ctx, staticWANRecord{Config: config}, m.configPath, func() error {
+			if err := m.writeNetworkConfig(content, 0644); err != nil {
+				return err
+			}
+			return m.reconfigureWAN(ctx)
+		})
+	})
+}
+
+func (m *StaticWANManager) applyWANChange(start func() (StaticWANTransaction, error)) (StaticWANTransaction, error) {
 	status, err := m.readStatus(StaticWANInterface)
 	if err != nil || status.LinkState != "carrier" {
 		return StaticWANTransaction{}, ErrStaticWANLinkDown
@@ -116,7 +133,7 @@ func (m *StaticWANManager) Apply(ctx context.Context, config StaticWANConfig) (S
 		if otherMode {
 			return ErrStaticWANPending
 		}
-		transaction, err = m.startTransaction(ctx, config)
+		transaction, err = start()
 		return err
 	})
 	if err != nil {
@@ -135,8 +152,7 @@ func (m *StaticWANManager) Confirm(ctx context.Context, id string) error {
 		if err != nil {
 			return err
 		}
-		status, err := m.readStatus(StaticWANInterface)
-		if err != nil || !staticStatusMatches(status, record.Config) {
+		if !m.matchesWANChange(ctx, record) {
 			return ErrStaticWANNotConfirmed
 		}
 		if err := m.stopRollback(ctx, id, true); err != nil {
@@ -187,11 +203,15 @@ func (m *StaticWANManager) RecoverPending(ctx context.Context) error {
 	return nil
 }
 
-func (m *StaticWANManager) startTransaction(ctx context.Context, config StaticWANConfig) (StaticWANTransaction, error) {
-	content, err := RenderStaticWAN(config)
-	if err != nil {
-		return StaticWANTransaction{}, err
+func (m *StaticWANManager) matchesWANChange(ctx context.Context, record staticWANRecord) bool {
+	if record.Line != nil {
+		return m.lineMatches(ctx, *record.Line)
 	}
+	status, err := m.readStatus(StaticWANInterface)
+	return err == nil && staticStatusMatches(status, record.Config)
+}
+
+func (m *StaticWANManager) startTransaction(ctx context.Context, record staticWANRecord, originalPath string, apply func() error) (StaticWANTransaction, error) {
 	id, err := newStaticWANTransactionID()
 	if err != nil {
 		return StaticWANTransaction{}, errors.New("create static WAN transaction")
@@ -210,7 +230,7 @@ func (m *StaticWANManager) startTransaction(ctx context.Context, config StaticWA
 		}
 	}()
 
-	original, originalExists, originalMode, err := readStaticWANFile(m.configPath)
+	original, originalExists, originalMode, err := readStaticWANFile(originalPath)
 	if err != nil {
 		return StaticWANTransaction{}, err
 	}
@@ -227,22 +247,18 @@ func (m *StaticWANManager) startTransaction(ctx context.Context, config StaticWA
 	backup := staticWANBackup{
 		OriginalExists: originalExists,
 		OriginalMode:   originalPermissions,
+		Line:           record.Line,
 	}
 	if err := writeJSONFile(filepath.Join(directory, "backup.json"), backup); err != nil {
 		return StaticWANTransaction{}, err
 	}
-	record := staticWANRecord{Config: config}
 	if err := writeJSONFile(filepath.Join(directory, "transaction.json"), record); err != nil {
 		return StaticWANTransaction{}, err
 	}
 	if err := m.startRollback(ctx, id); err != nil {
 		return StaticWANTransaction{}, err
 	}
-	if err := m.writeNetworkConfig(content, 0644); err != nil {
-		_ = m.stopRollback(ctx, id, false)
-		return StaticWANTransaction{}, err
-	}
-	if err := m.reconfigureWAN(ctx); err != nil {
+	if err := apply(); err != nil {
 		if restoreErr := m.restoreOriginal(ctx, directory); restoreErr == nil {
 			if stopErr := m.stopRollback(ctx, id, false); stopErr == nil {
 				return StaticWANTransaction{}, err
@@ -263,13 +279,13 @@ func (m *StaticWANManager) rollback(ctx context.Context, id string, fromTimer bo
 		if err != nil {
 			return err
 		}
+		if err := m.restoreOriginal(ctx, directory); err != nil {
+			return err
+		}
 		if !fromTimer {
 			if err := m.stopRollback(ctx, id, false); err != nil {
 				return err
 			}
-		}
-		if err := m.restoreOriginal(ctx, directory); err != nil {
-			return err
 		}
 		return m.removeTransaction(directory)
 	})
@@ -283,6 +299,12 @@ func (m *StaticWANManager) restoreOriginal(ctx context.Context, directory string
 	var backup staticWANBackup
 	if err := json.Unmarshal(backupData, &backup); err != nil || backup.OriginalMode&^uint32(0777) != 0 || (!backup.OriginalExists && backup.OriginalMode != 0) {
 		return errors.New("decode static WAN rollback metadata")
+	}
+	if backup.Line != nil {
+		if !backup.Line.valid() {
+			return errors.New("invalid WAN line rollback metadata")
+		}
+		return m.restoreWANLine(ctx, directory, backup, *backup.Line)
 	}
 	if backup.OriginalExists {
 		original, exists, _, err := readStaticWANFile(filepath.Join(directory, "original"))
@@ -434,7 +456,10 @@ func (m *StaticWANManager) loadTransaction(id string) (string, staticWANRecord, 
 		return "", staticWANRecord{}, ErrStaticWANTransaction
 	}
 	var record staticWANRecord
-	if err := json.Unmarshal(data, &record); err != nil || ValidateStaticWAN(record.Config) != nil {
+	if err := json.Unmarshal(data, &record); err != nil {
+		return "", staticWANRecord{}, ErrStaticWANTransaction
+	}
+	if record.Line != nil && !record.Line.valid() || record.Line == nil && ValidateStaticWAN(record.Config) != nil {
 		return "", staticWANRecord{}, ErrStaticWANTransaction
 	}
 	return directory, record, nil
