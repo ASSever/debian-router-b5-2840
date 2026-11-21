@@ -20,12 +20,33 @@ const reasons: Record<string, string> = {
   line_too_long: "Server link is too long.",
   provider_options_unverified:
     "Provider-specific options require review before use.",
+  subscription_changed:
+    "The saved subscription changed. Reload before checking.",
+  subscription_busy: "Another proxy operation is in progress.",
+  server_not_found: "The selected entry is no longer available.",
+  server_dns_failed: "The router could not resolve the server address.",
+  nonpublic_destination: "The server must resolve to a public address.",
+  unsupported_options: "The selected entry requires unsupported options.",
+  worker_unavailable: "The sing-box check could not start.",
+  config_rejected: "sing-box rejected the test configuration.",
+  worker_start_failed: "The temporary proxy did not become ready.",
+  proxy_request_failed: "The HTTPS request through this server failed.",
+  unexpected_http_status: "The test destination returned an unexpected status.",
+  timed_out: "The check timed out.",
+  canceled: "The check was canceled.",
 };
 
 type Report = {
+  id?: string;
   imported: number;
   rejected: number;
   rows: { line: number; protocol?: string; error?: string; warning?: string }[];
+};
+
+type CheckResult = {
+  status: "passed" | "failed";
+  reason?: string;
+  elapsed_ms: number;
 };
 
 const protocolNames: Record<string, string> = {
@@ -39,6 +60,8 @@ export default function ProxySubscriptionPanel() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [checking, setChecking] = useState<number | null>(null);
+  const [checks, setChecks] = useState<Record<number, string>>({});
 
   useEffect(() => {
     const controller = new AbortController();
@@ -73,6 +96,7 @@ export default function ProxySubscriptionPanel() {
       const result = await response.json();
       if (response.ok || response.status === 422) {
         setReport(result as Report);
+        setChecks({});
         if (response.status === 422) {
           setError(
             "No entries imported. Any previously saved subscription was kept.",
@@ -88,6 +112,30 @@ export default function ProxySubscriptionPanel() {
       setError("Unable to import the subscription.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function checkServer(line: number) {
+    setChecking(line);
+    setChecks((previous) => ({ ...previous, [line]: "Checking…" }));
+    try {
+      const response = await fetch(`${endpoint}/check`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ line, subscription_id: report?.id ?? "" }),
+      });
+      const result = await response.json();
+      const message = response.ok
+        ? describeCheck(result as CheckResult)
+        : (reasons[result.error as string] ?? "Unable to check this server.");
+      setChecks((previous) => ({ ...previous, [line]: message }));
+    } catch {
+      setChecks((previous) => ({
+        ...previous,
+        [line]: "Unable to check this server.",
+      }));
+    } finally {
+      setChecking(null);
     }
   }
 
@@ -120,7 +168,9 @@ export default function ProxySubscriptionPanel() {
           <button
             className="primary-button"
             type="submit"
-            disabled={busy || loading || source.trim() === ""}
+            disabled={
+              busy || loading || checking !== null || source.trim() === ""
+            }
           >
             {busy ? "Importing…" : "Import subscription"}
           </button>
@@ -148,11 +198,29 @@ export default function ProxySubscriptionPanel() {
                 Line {row.line}
                 {row.protocol ? ` · ${protocolNames[row.protocol]}` : ""}
                 {" · "}
-                {row.error
-                  ? (reasons[row.error] ?? "Invalid entry.")
-                  : "Connectivity unchecked."}
+                {row.error ? (
+                  (reasons[row.error] ?? "Invalid entry.")
+                ) : (
+                  <span aria-live="polite">
+                    {checks[row.line] ?? "Connectivity unchecked."}
+                  </span>
+                )}
                 {row.warning &&
                   ` ${reasons[row.warning] ?? "Review this entry before use."}`}
+                {!row.error && (
+                  <>
+                    {" "}
+                    <button
+                      className="refresh-button"
+                      type="button"
+                      aria-label={`Check server on line ${row.line}`}
+                      disabled={busy || checking !== null}
+                      onClick={() => void checkServer(row.line)}
+                    >
+                      Check server
+                    </button>
+                  </>
+                )}
               </li>
             ))}
           </ul>
@@ -160,4 +228,11 @@ export default function ProxySubscriptionPanel() {
       )}
     </section>
   );
+}
+
+function describeCheck(result: CheckResult): string {
+  if (result.status === "passed") {
+    return `HTTPS check passed in ${result.elapsed_ms} ms.`;
+  }
+  return reasons[result.reason ?? ""] ?? "The HTTPS check failed.";
 }

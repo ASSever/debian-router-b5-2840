@@ -152,6 +152,7 @@ func newAPIWithNetworkOperations(
 	mux.HandleFunc("POST /api/network/wan/pppoe/reconnect", a.reconnectPPPoESettings)
 	mux.HandleFunc("GET /api/proxy/subscription", a.readProxySubscription)
 	mux.HandleFunc("POST /api/proxy/subscription", a.importProxySubscription)
+	mux.HandleFunc("POST /api/proxy/subscription/check", a.checkProxyServer)
 	mux.HandleFunc("POST /api/auth/login", a.login)
 	mux.HandleFunc("GET /api/auth/session", a.sessionStatus)
 	mux.HandleFunc("DELETE /api/auth/session", a.logout)

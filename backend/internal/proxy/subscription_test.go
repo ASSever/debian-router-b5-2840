@@ -43,6 +43,7 @@ func TestParseMixedSubscription(t *testing.T) {
 				t.Fatal("public report exposed private content")
 			}
 			directory := t.TempDir()
+			result.Report.ID = "current-revision"
 			if err := Save(directory, result); err != nil {
 				t.Fatal(err)
 			}
@@ -56,6 +57,15 @@ func TestParseMixedSubscription(t *testing.T) {
 			saved, err := ReadReport(directory)
 			if err != nil || saved.Imported != result.Report.Imported {
 				t.Fatal("saved summary unavailable")
+			}
+			if _, err := ReadServer(directory, "previous-revision", 3); err != ErrSubscriptionChanged {
+				t.Fatal("stale selection was accepted")
+			}
+			if _, err := ReadServer(directory, result.Report.ID, 5); err != ErrServerNotFound {
+				t.Fatal("rejected row was selectable")
+			}
+			if server, err := ReadServer(directory, result.Report.ID, 3); err != nil || server.Protocol != "vless" {
+				t.Fatal("selected server was unavailable")
 			}
 		})
 	}

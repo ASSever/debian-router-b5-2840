@@ -9,6 +9,35 @@ import (
 
 const stateFile = "proxy-subscription.json"
 
+var (
+	ErrServerNotFound      = errors.New("server_not_found")
+	ErrSubscriptionChanged = errors.New("subscription_changed")
+)
+
+// ReadServer retrieves one private server from the same subscription revision the caller displayed.
+func ReadServer(directory, id string, line int) (Server, error) {
+	data, err := os.ReadFile(filepath.Join(directory, stateFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return Server{}, ErrServerNotFound
+	}
+	if err != nil {
+		return Server{}, err
+	}
+	var state Subscription
+	if err := json.Unmarshal(data, &state); err != nil {
+		return Server{}, err
+	}
+	if state.Report.ID != id {
+		return Server{}, ErrSubscriptionChanged
+	}
+	for _, server := range state.Servers {
+		if server.Line == line {
+			return server, nil
+		}
+	}
+	return Server{}, ErrServerNotFound
+}
+
 // ReadReport loads the last saved diagnostics without returning any credentials.
 func ReadReport(directory string) (Report, error) {
 	data, err := os.ReadFile(filepath.Join(directory, stateFile))

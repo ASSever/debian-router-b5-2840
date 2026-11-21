@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"errors"
 	"log"
 	"net/http"
@@ -73,6 +74,8 @@ func (a *api) importProxySubscription(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, report)
 		return
 	}
+	report.ID = rand.Text()
+	subscription.Report = report
 	if err := proxy.Save(proxyStateDirectory(), subscription); err != nil {
 		proxyImportError(w, http.StatusInternalServerError, "subscription_storage_failed")
 		return
