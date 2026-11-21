@@ -19,24 +19,26 @@ import (
 const (
 	defaultSocketPath = "/run/debian-router-agent/agent.sock"
 	maxRequestBytes   = 1024
-	maxResponseBytes  = 1024
+	maxResponseBytes  = 16384
 	connectionTimeout = 20 * time.Second
 )
 
 // Request is the only message accepted by the privileged agent.
 type Request struct {
-	LANConfig       *networkinventory.LANConfig       `json:"lan_config,omitempty"`
-	LANDestination  string                            `json:"lan_destination,omitempty"`
-	WANLineConfig   *networkinventory.WANLineConfig   `json:"wan_line_config,omitempty"`
-	Interface       string                            `json:"interface,omitempty"`
-	Operation       string                            `json:"operation"`
-	StaticWANConfig *networkinventory.StaticWANConfig `json:"static_wan_config,omitempty"`
-	PPPoEConfig     *networkinventory.PPPoEConfig     `json:"pppoe_config,omitempty"`
-	TransactionID   string                            `json:"transaction_id,omitempty"`
+	ReservationChange *networkinventory.ReservationChange `json:"reservation_change,omitempty"`
+	LANConfig         *networkinventory.LANConfig         `json:"lan_config,omitempty"`
+	LANDestination    string                              `json:"lan_destination,omitempty"`
+	WANLineConfig     *networkinventory.WANLineConfig     `json:"wan_line_config,omitempty"`
+	Interface         string                              `json:"interface,omitempty"`
+	Operation         string                              `json:"operation"`
+	StaticWANConfig   *networkinventory.StaticWANConfig   `json:"static_wan_config,omitempty"`
+	PPPoEConfig       *networkinventory.PPPoEConfig       `json:"pppoe_config,omitempty"`
+	TransactionID     string                              `json:"transaction_id,omitempty"`
 }
 
 // Response contains harmless status data or a stable error code.
 type Response struct {
+	Reservations         *networkinventory.DHCPReservations     `json:"reservations,omitempty"`
 	LANStatus            *networkinventory.LANStatus            `json:"lan_status,omitempty"`
 	LANConflict          *networkinventory.LANConflict          `json:"lan_conflict,omitempty"`
 	WANLineStatus        *networkinventory.WANLineStatus        `json:"wan_line_status,omitempty"`
@@ -336,15 +338,17 @@ func handleConnectionWithAllOperations(
 		writeResponse(connection, Response{Error: "invalid_request"})
 		return
 	}
-	if (request.LANConfig != nil && request.Operation != "lan-apply") ||
+	if request.ReservationChange != nil && request.Operation != "reservation-change" ||
+		(request.LANConfig != nil && request.Operation != "lan-apply") ||
 		(request.LANDestination != "" && request.Operation != "lan-confirm") {
 		writeResponse(connection, Response{Error: "invalid_request"})
 		return
 	}
 	switch request.Operation {
-	case "lan-status", "lan-apply", "lan-confirm":
+	case "lan-status", "lan-apply", "lan-confirm", "reservation-list", "reservation-change":
 		if request.Interface != "" || request.StaticWANConfig != nil || request.PPPoEConfig != nil || request.WANLineConfig != nil ||
 			(request.Operation == "lan-apply") != (request.LANConfig != nil) ||
+			(request.Operation == "reservation-change") != (request.ReservationChange != nil) ||
 			(request.Operation == "lan-confirm") != (request.TransactionID != "" && request.LANDestination != "") ||
 			(request.Operation != "lan-confirm" && request.TransactionID != "") {
 			writeResponse(connection, Response{Error: "invalid_request"})
@@ -568,6 +572,28 @@ func writeResponse(writer io.Writer, response Response) {
 
 func handleLANRequest(ctx context.Context, manager *networkinventory.StaticWANManager, request Request) Response {
 	switch request.Operation {
+	case "reservation-list":
+		result, err := manager.ListDHCPReservations()
+		if err != nil {
+			return Response{Error: "reservations_unavailable"}
+		}
+		return Response{Reservations: &result}
+	case "reservation-change":
+		err := manager.ChangeDHCPReservation(ctx, *request.ReservationChange)
+		switch {
+		case err == nil:
+			return Response{Status: "saved"}
+		case errors.Is(err, networkinventory.ErrStaticWANPending):
+			return Response{Error: "network_change_pending"}
+		case errors.Is(err, networkinventory.ErrReservationInvalid),
+			errors.Is(err, networkinventory.ErrReservationConflict),
+			errors.Is(err, networkinventory.ErrReservationMissing),
+			errors.Is(err, networkinventory.ErrReservationLimit):
+			return Response{Error: err.Error()}
+		default:
+			log.Printf("change DHCP reservation: %v", err)
+			return Response{Error: "reservations_unavailable"}
+		}
 	case "lan-status":
 		status, err := manager.LANStatus(ctx)
 		if err != nil {
@@ -580,6 +606,9 @@ func handleLANRequest(ctx context.Context, manager *networkinventory.StaticWANMa
 			var conflict *networkinventory.LANConflict
 			if errors.As(err, &conflict) {
 				return Response{Error: "lan_overlap", LANConflict: conflict}
+			}
+			if errors.Is(err, networkinventory.ErrReservationConflict) {
+				return Response{Error: "lan_reservation_conflict"}
 			}
 			if errors.Is(err, networkinventory.ErrStaticWANPending) {
 				return Response{Error: "network_change_pending"}

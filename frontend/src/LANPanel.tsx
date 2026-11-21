@@ -25,6 +25,8 @@ class LANError extends Error {
         "Enter an ordered pool within the LAN subnet, excluding the router, network and broadcast addresses.",
       network_change_pending:
         "Finish the current network change before applying LAN settings.",
+      lan_reservation_conflict:
+        "Edit or remove DHCP reservations that fall outside the new LAN or use its gateway address.",
       lan_confirmation_requires_new_address:
         "Reconnect the LAN client and open the new address before confirming.",
       lan_confirmation_failed:
