@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"syscall"
@@ -24,6 +25,8 @@ const (
 
 // Request is the only message accepted by the privileged agent.
 type Request struct {
+	LANConfig       *networkinventory.LANConfig       `json:"lan_config,omitempty"`
+	LANDestination  string                            `json:"lan_destination,omitempty"`
 	WANLineConfig   *networkinventory.WANLineConfig   `json:"wan_line_config,omitempty"`
 	Interface       string                            `json:"interface,omitempty"`
 	Operation       string                            `json:"operation"`
@@ -34,6 +37,8 @@ type Request struct {
 
 // Response contains harmless status data or a stable error code.
 type Response struct {
+	LANStatus            *networkinventory.LANStatus            `json:"lan_status,omitempty"`
+	LANConflict          *networkinventory.LANConflict          `json:"lan_conflict,omitempty"`
 	WANLineStatus        *networkinventory.WANLineStatus        `json:"wan_line_status,omitempty"`
 	DHCPStatus           *networkinventory.DHCPStatus           `json:"dhcp_status,omitempty"`
 	StaticWANTransaction *networkinventory.StaticWANTransaction `json:"static_wan_transaction,omitempty"`
@@ -71,6 +76,9 @@ func Serve(ctx context.Context, socketPath string, allowedGID uint32) error {
 	}
 	if err := manager.RecoverPending(ctx); err != nil {
 		return fmt.Errorf("recover pending WAN configuration: %w", err)
+	}
+	if err := manager.RecoverLAN(ctx); err != nil {
+		log.Printf("restore LAN services: %v", err)
 	}
 	pppoe, err := networkinventory.NewPPPoEManager()
 	if err != nil {
@@ -180,6 +188,10 @@ func SendConfirmStaticWAN(ctx context.Context, socketPath, transactionID string)
 // SendRollbackStaticWAN restores the previous WAN configuration immediately.
 func SendRollbackStaticWAN(ctx context.Context, socketPath, transactionID string) (Response, error) {
 	return sendRequest(ctx, socketPath, Request{Operation: "static-wan-rollback", TransactionID: transactionID})
+}
+
+func SendLAN(ctx context.Context, socketPath string, request Request) (Response, error) {
+	return sendRequest(ctx, socketPath, request)
 }
 
 func SendWANLine(ctx context.Context, socketPath string, config *networkinventory.WANLineConfig) (Response, error) {
@@ -324,7 +336,29 @@ func handleConnectionWithAllOperations(
 		writeResponse(connection, Response{Error: "invalid_request"})
 		return
 	}
+	if (request.LANConfig != nil && request.Operation != "lan-apply") ||
+		(request.LANDestination != "" && request.Operation != "lan-confirm") {
+		writeResponse(connection, Response{Error: "invalid_request"})
+		return
+	}
 	switch request.Operation {
+	case "lan-status", "lan-apply", "lan-confirm":
+		if request.Interface != "" || request.StaticWANConfig != nil || request.PPPoEConfig != nil || request.WANLineConfig != nil ||
+			(request.Operation == "lan-apply") != (request.LANConfig != nil) ||
+			(request.Operation == "lan-confirm") != (request.TransactionID != "" && request.LANDestination != "") ||
+			(request.Operation != "lan-confirm" && request.TransactionID != "") {
+			writeResponse(connection, Response{Error: "invalid_request"})
+			return
+		}
+		manager, ok := staticWAN.(*networkinventory.StaticWANManager)
+		if !ok {
+			writeResponse(connection, Response{Error: "unsupported_operation"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), connectionTimeout)
+		defer cancel()
+		writeResponse(connection, handleLANRequest(ctx, manager, request))
+
 	case "status":
 		if request.Interface != "" || request.StaticWANConfig != nil || request.PPPoEConfig != nil || request.TransactionID != "" {
 			writeResponse(connection, Response{Error: "invalid_request"})
@@ -530,4 +564,36 @@ func decodeRequest(reader io.Reader) (Request, error) {
 
 func writeResponse(writer io.Writer, response Response) {
 	_ = json.NewEncoder(writer).Encode(response)
+}
+
+func handleLANRequest(ctx context.Context, manager *networkinventory.StaticWANManager, request Request) Response {
+	switch request.Operation {
+	case "lan-status":
+		status, err := manager.LANStatus(ctx)
+		if err != nil {
+			return Response{Error: "lan_status_unavailable"}
+		}
+		return Response{LANStatus: &status}
+	case "lan-apply":
+		transaction, err := manager.ApplyLAN(ctx, *request.LANConfig)
+		if err != nil {
+			var conflict *networkinventory.LANConflict
+			if errors.As(err, &conflict) {
+				return Response{Error: "lan_overlap", LANConflict: conflict}
+			}
+			if errors.Is(err, networkinventory.ErrStaticWANPending) {
+				return Response{Error: "network_change_pending"}
+			}
+			log.Printf("apply LAN settings: %v", err)
+			return Response{Error: "lan_apply_failed"}
+		}
+		return Response{StaticWANTransaction: &transaction}
+	case "lan-confirm":
+		if err := manager.ConfirmLAN(ctx, request.TransactionID, request.LANDestination); err != nil {
+			return Response{Error: "lan_confirmation_failed"}
+		}
+		return Response{Status: "confirmed"}
+	default:
+		return Response{Error: "invalid_request"}
+	}
 }

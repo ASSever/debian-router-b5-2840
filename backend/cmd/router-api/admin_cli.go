@@ -14,7 +14,7 @@ import (
 
 func adminCommand(db *sql.DB, args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: router-api [admin-status|admin-init|admin-login|admin-reset|tls-certificate]")
+		return errors.New("usage: router-api [admin-status|admin-init|admin-login|admin-reset|tls-certificate|lan-tls-certificate]")
 	}
 	ctx := context.Background()
 	switch args[0] {
@@ -95,12 +95,16 @@ func adminCommand(db *sql.DB, args []string) error {
 		}
 		fmt.Fprintln(os.Stdout, "Password changed. Login successful.")
 		return nil
-	case "tls-certificate":
+	case "tls-certificate", "lan-tls-certificate":
 		dataDir := os.Getenv("STATE_DIRECTORY")
 		if dataDir == "" {
 			dataDir = "."
 		}
-		certPath, _, _, err := loadTLSCertificate(filepath.Clean(dataDir))
+		load := loadTLSCertificate
+		if args[0] == "lan-tls-certificate" {
+			load = loadLANTLSCertificate
+		}
+		certPath, _, _, err := load(filepath.Clean(dataDir))
 		if err != nil {
 			return err
 		}
@@ -111,7 +115,7 @@ func adminCommand(db *sql.DB, args []string) error {
 		_, err = os.Stdout.Write(certificate)
 		return err
 	default:
-		return errors.New("usage: router-api [admin-status|admin-init|admin-login|admin-reset|tls-certificate]")
+		return errors.New("usage: router-api [admin-status|admin-init|admin-login|admin-reset|tls-certificate|lan-tls-certificate]")
 	}
 }
 

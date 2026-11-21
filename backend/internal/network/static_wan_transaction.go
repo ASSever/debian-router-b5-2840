@@ -37,14 +37,17 @@ type StaticWANTransaction struct {
 }
 
 type staticWANRecord struct {
-	Config StaticWANConfig `json:"config"`
-	Line   *wanLineProfile `json:"line,omitempty"`
+	Config    StaticWANConfig `json:"config"`
+	Line      *wanLineProfile `json:"line,omitempty"`
+	LAN       *LANConfig      `json:"lan,omitempty"`
+	LANExpiry *time.Time      `json:"lan_expiry,omitempty"`
 }
 
 type staticWANBackup struct {
 	OriginalExists bool            `json:"original_exists"`
 	OriginalMode   uint32          `json:"original_mode"`
 	Line           *wanLineProfile `json:"line,omitempty"`
+	LAN            *LANConfig      `json:"lan,omitempty"`
 }
 
 // StaticWANManager applies only to enp1s0 and keeps an exact rollback copy.
@@ -144,6 +147,17 @@ func (m *StaticWANManager) applyWANChange(start func() (StaticWANTransaction, er
 
 // Confirm disarms rollback only after networkd reports the requested settings.
 func (m *StaticWANManager) Confirm(ctx context.Context, id string) error {
+	return m.confirmNetworkChange(ctx, id, "")
+}
+
+func (m *StaticWANManager) ConfirmLAN(ctx context.Context, id, destination string) error {
+	if destination == "" {
+		return ErrStaticWANNotConfirmed
+	}
+	return m.confirmNetworkChange(ctx, id, destination)
+}
+
+func (m *StaticWANManager) confirmNetworkChange(ctx context.Context, id, destination string) error {
 	if !validStaticWANTransactionID(id) {
 		return ErrStaticWANTransaction
 	}
@@ -152,7 +166,13 @@ func (m *StaticWANManager) Confirm(ctx context.Context, id string) error {
 		if err != nil {
 			return err
 		}
-		if !m.matchesWANChange(ctx, record) {
+		matches := false
+		if record.LAN != nil {
+			matches = m.lanMatches(ctx, *record.LAN, destination)
+		} else if destination == "" {
+			matches = m.matchesWANChange(ctx, record)
+		}
+		if !matches || record.LANExpiry != nil && !m.now().Before(*record.LANExpiry) {
 			return ErrStaticWANNotConfirmed
 		}
 		if err := m.stopRollback(ctx, id, true); err != nil {
@@ -240,6 +260,10 @@ func (m *StaticWANManager) startTransaction(ctx context.Context, record staticWA
 		}
 	}
 	expiresAt := m.now().Add(staticWANDelay)
+	if record.LAN != nil {
+		expiresAt = m.now().Add(300 * time.Second)
+		record.LANExpiry = &expiresAt
+	}
 	originalPermissions := uint32(0)
 	if originalExists {
 		originalPermissions = uint32(originalMode.Mode().Perm())
@@ -248,6 +272,7 @@ func (m *StaticWANManager) startTransaction(ctx context.Context, record staticWA
 		OriginalExists: originalExists,
 		OriginalMode:   originalPermissions,
 		Line:           record.Line,
+		LAN:            record.LAN,
 	}
 	if err := writeJSONFile(filepath.Join(directory, "backup.json"), backup); err != nil {
 		return StaticWANTransaction{}, err
@@ -255,7 +280,7 @@ func (m *StaticWANManager) startTransaction(ctx context.Context, record staticWA
 	if err := writeJSONFile(filepath.Join(directory, "transaction.json"), record); err != nil {
 		return StaticWANTransaction{}, err
 	}
-	if err := m.startRollback(ctx, id); err != nil {
+	if err := m.startRollback(ctx, id, expiresAt.Sub(m.now()).Round(time.Second)); err != nil {
 		return StaticWANTransaction{}, err
 	}
 	if err := apply(); err != nil {
@@ -306,6 +331,9 @@ func (m *StaticWANManager) restoreOriginal(ctx context.Context, directory string
 		}
 		return m.restoreWANLine(ctx, directory, backup, *backup.Line)
 	}
+	if backup.LAN != nil {
+		return m.restoreLAN(ctx, directory, backup)
+	}
 	if backup.OriginalExists {
 		original, exists, _, err := readStaticWANFile(filepath.Join(directory, "original"))
 		if err != nil {
@@ -324,12 +352,12 @@ func (m *StaticWANManager) restoreOriginal(ctx context.Context, directory string
 	return m.reconfigureWAN(ctx)
 }
 
-func (m *StaticWANManager) startRollback(ctx context.Context, id string) error {
+func (m *StaticWANManager) startRollback(ctx context.Context, id string, delay time.Duration) error {
 	unit := staticWANUnitPrefix + id
 	args := []string{
 		"--system", "--quiet", "--no-block", "--collect",
 		"--unit=" + unit,
-		"--on-active=" + fmt.Sprintf("%ds", int(staticWANDelay/time.Second)),
+		"--on-active=" + fmt.Sprintf("%ds", int(delay/time.Second)),
 		"--timer-property=AccuracySec=1s",
 		"--property=Type=oneshot",
 		"--property=User=root",
@@ -459,7 +487,16 @@ func (m *StaticWANManager) loadTransaction(id string) (string, staticWANRecord, 
 	if err := json.Unmarshal(data, &record); err != nil {
 		return "", staticWANRecord{}, ErrStaticWANTransaction
 	}
-	if record.Line != nil && !record.Line.valid() || record.Line == nil && ValidateStaticWAN(record.Config) != nil {
+	switch {
+	case record.LAN != nil:
+		if ValidateLAN(*record.LAN) != nil || record.LANExpiry == nil {
+			return "", staticWANRecord{}, ErrStaticWANTransaction
+		}
+	case record.Line != nil:
+		if !record.Line.valid() {
+			return "", staticWANRecord{}, ErrStaticWANTransaction
+		}
+	case ValidateStaticWAN(record.Config) != nil:
 		return "", staticWANRecord{}, ErrStaticWANTransaction
 	}
 	return directory, record, nil
