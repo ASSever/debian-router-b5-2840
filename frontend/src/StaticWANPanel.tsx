@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import WANLinePanel from "./WANLinePanel";
 
 const REQUEST_TIMEOUT_MS = 25_000;
 
@@ -546,6 +547,7 @@ export default function StaticWANPanel() {
               </div>
             )}
           </form>
+          <WANLinePanel />
         </>
       )}
 

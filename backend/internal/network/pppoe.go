@@ -155,6 +155,9 @@ func (m *PPPoEManager) Apply(ctx context.Context, config PPPoEConfig) (PPPoETran
 		if static {
 			return ErrPPPoEPending
 		}
+		if active, err := wanLineActive(m.configPath); err != nil || active {
+			return ErrPPPoEPending
+		}
 		transaction, err = m.startTransaction(ctx, config)
 		return err
 	})

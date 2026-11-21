@@ -24,6 +24,7 @@ const (
 
 // Request is the only message accepted by the privileged agent.
 type Request struct {
+	WANLineConfig   *networkinventory.WANLineConfig   `json:"wan_line_config,omitempty"`
 	Interface       string                            `json:"interface,omitempty"`
 	Operation       string                            `json:"operation"`
 	StaticWANConfig *networkinventory.StaticWANConfig `json:"static_wan_config,omitempty"`
@@ -33,6 +34,7 @@ type Request struct {
 
 // Response contains harmless status data or a stable error code.
 type Response struct {
+	WANLineStatus        *networkinventory.WANLineStatus        `json:"wan_line_status,omitempty"`
 	DHCPStatus           *networkinventory.DHCPStatus           `json:"dhcp_status,omitempty"`
 	StaticWANTransaction *networkinventory.StaticWANTransaction `json:"static_wan_transaction,omitempty"`
 	PPPoETransaction     *networkinventory.PPPoETransaction     `json:"pppoe_transaction,omitempty"`
@@ -180,6 +182,14 @@ func SendRollbackStaticWAN(ctx context.Context, socketPath, transactionID string
 	return sendRequest(ctx, socketPath, Request{Operation: "static-wan-rollback", TransactionID: transactionID})
 }
 
+func SendWANLine(ctx context.Context, socketPath string, config *networkinventory.WANLineConfig) (Response, error) {
+	operation := "wan-line-status"
+	if config != nil {
+		operation = "wan-line-apply"
+	}
+	return sendRequest(ctx, socketPath, Request{Operation: operation, WANLineConfig: config})
+}
+
 func SendApplyPPPoE(ctx context.Context, socketPath string, config networkinventory.PPPoEConfig) (Response, error) {
 	return sendRequest(ctx, socketPath, Request{Operation: "pppoe-apply", Interface: networkinventory.StaticWANInterface, PPPoEConfig: &config})
 }
@@ -310,6 +320,10 @@ func handleConnectionWithAllOperations(
 		writeResponse(connection, Response{Error: "invalid_request"})
 		return
 	}
+	if request.WANLineConfig != nil && request.Operation != "wan-line-apply" {
+		writeResponse(connection, Response{Error: "invalid_request"})
+		return
+	}
 	switch request.Operation {
 	case "status":
 		if request.Interface != "" || request.StaticWANConfig != nil || request.PPPoEConfig != nil || request.TransactionID != "" {
@@ -328,6 +342,34 @@ func handleConnectionWithAllOperations(
 			return
 		}
 		writeResponse(connection, Response{DHCPStatus: &status})
+	case "wan-line-status", "wan-line-apply":
+		if request.Interface != "" || request.StaticWANConfig != nil || request.PPPoEConfig != nil ||
+			request.TransactionID != "" || (request.Operation == "wan-line-apply") != (request.WANLineConfig != nil) {
+			writeResponse(connection, Response{Error: "invalid_request"})
+			return
+		}
+		manager, ok := staticWAN.(*networkinventory.StaticWANManager)
+		if !ok {
+			writeResponse(connection, Response{Error: "unsupported_operation"})
+			return
+		}
+		if request.WANLineConfig == nil {
+			status, err := manager.WANLineStatus()
+			if err != nil {
+				writeResponse(connection, Response{Error: "wan_line_status_unavailable"})
+				return
+			}
+			writeResponse(connection, Response{WANLineStatus: &status})
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), connectionTimeout)
+		defer cancel()
+		transaction, err := manager.ApplyWANLine(ctx, *request.WANLineConfig)
+		if err != nil {
+			writeResponse(connection, Response{Error: "wan_line_apply_failed"})
+			return
+		}
+		writeResponse(connection, Response{StaticWANTransaction: &transaction})
 	case "static-wan-apply":
 		if request.Interface != networkinventory.StaticWANInterface || request.StaticWANConfig == nil || request.PPPoEConfig != nil || request.TransactionID != "" {
 			writeResponse(connection, Response{Error: "invalid_request"})
