@@ -3,6 +3,7 @@ import WANLinePanel from "./WANLinePanel";
 import LANPanel from "./LANPanel";
 import DHCPReservationsPanel from "./DHCPReservationsPanel";
 import LANDNSPanel from "./LANDNSPanel";
+import FirewallPanel from "./FirewallPanel";
 
 const REQUEST_TIMEOUT_MS = 25_000;
 
@@ -554,6 +555,7 @@ export default function StaticWANPanel() {
           <LANPanel />
           <DHCPReservationsPanel />
           <LANDNSPanel />
+          <FirewallPanel />
         </>
       )}
 

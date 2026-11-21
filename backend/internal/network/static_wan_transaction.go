@@ -37,14 +37,16 @@ type StaticWANTransaction struct {
 }
 
 type staticWANRecord struct {
-	DNS       bool            `json:"dns_change,omitempty"`
-	Config    StaticWANConfig `json:"config"`
-	Line      *wanLineProfile `json:"line,omitempty"`
-	LAN       *LANConfig      `json:"lan,omitempty"`
-	LANExpiry *time.Time      `json:"lan_expiry,omitempty"`
+	FirewallExpiry *time.Time      `json:"firewall_expiry,omitempty"`
+	DNS            bool            `json:"dns_change,omitempty"`
+	Config         StaticWANConfig `json:"config"`
+	Line           *wanLineProfile `json:"line,omitempty"`
+	LAN            *LANConfig      `json:"lan,omitempty"`
+	LANExpiry      *time.Time      `json:"lan_expiry,omitempty"`
 }
 
 type staticWANBackup struct {
+	Firewall       bool            `json:"firewall,omitempty"`
 	DNS            bool            `json:"dns_change,omitempty"`
 	OriginalExists bool            `json:"original_exists"`
 	OriginalMode   uint32          `json:"original_mode"`
@@ -169,7 +171,9 @@ func (m *StaticWANManager) confirmNetworkChange(ctx context.Context, id, destina
 			return err
 		}
 		matches := false
-		if record.LAN != nil {
+		if record.FirewallExpiry != nil {
+			matches = destination == "" && m.now().Before(*record.FirewallExpiry) && m.firewallReady(ctx)
+		} else if record.LAN != nil {
 			matches = m.lanMatches(ctx, *record.LAN, destination)
 		} else if destination == "" {
 			matches = m.matchesWANChange(ctx, record)
@@ -262,6 +266,9 @@ func (m *StaticWANManager) startTransaction(ctx context.Context, record staticWA
 		}
 	}
 	expiresAt := m.now().Add(staticWANDelay)
+	if record.FirewallExpiry != nil {
+		record.FirewallExpiry = &expiresAt
+	}
 	if record.LAN != nil {
 		expiresAt = m.now().Add(300 * time.Second)
 		record.LANExpiry = &expiresAt
@@ -271,6 +278,7 @@ func (m *StaticWANManager) startTransaction(ctx context.Context, record staticWA
 		originalPermissions = uint32(originalMode.Mode().Perm())
 	}
 	backup := staticWANBackup{
+		Firewall:       record.FirewallExpiry != nil,
 		DNS:            record.DNS,
 		OriginalExists: originalExists,
 		OriginalMode:   originalPermissions,
@@ -339,6 +347,9 @@ func (m *StaticWANManager) restoreOriginal(ctx context.Context, directory string
 	}
 	if backup.DNS {
 		return m.restoreDNS(ctx, directory, backup)
+	}
+	if backup.Firewall {
+		return m.restoreFirewall(ctx)
 	}
 	if backup.OriginalExists {
 		original, exists, _, err := readStaticWANFile(filepath.Join(directory, "original"))
@@ -494,6 +505,7 @@ func (m *StaticWANManager) loadTransaction(id string) (string, staticWANRecord, 
 		return "", staticWANRecord{}, ErrStaticWANTransaction
 	}
 	switch {
+	case record.FirewallExpiry != nil:
 	case record.LAN != nil:
 		if ValidateLAN(*record.LAN) != nil || record.LANExpiry == nil {
 			return "", staticWANRecord{}, ErrStaticWANTransaction

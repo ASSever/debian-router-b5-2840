@@ -39,6 +39,7 @@ type Request struct {
 
 // Response contains harmless status data or a stable error code.
 type Response struct {
+	Firewall             *networkinventory.FirewallStatus       `json:"firewall,omitempty"`
 	DNSStatus            *networkinventory.LANDNSStatus         `json:"dns_status,omitempty"`
 	Reservations         *networkinventory.DHCPReservations     `json:"reservations,omitempty"`
 	LANStatus            *networkinventory.LANStatus            `json:"lan_status,omitempty"`
@@ -91,6 +92,7 @@ func Serve(ctx context.Context, socketPath string, allowedGID uint32) error {
 	if err := pppoe.RecoverPending(ctx); err != nil {
 		return fmt.Errorf("recover pending PPPoE configuration: %w", err)
 	}
+	go manager.MaintainFirewall(ctx)
 	return serveWithAllOperations(ctx, socketPath, allowedGID, networkinventory.ReadDHCPStatus, manager, pppoe)
 }
 
@@ -348,7 +350,7 @@ func handleConnectionWithAllOperations(
 		return
 	}
 	switch request.Operation {
-	case "lan-status", "lan-apply", "lan-confirm", "reservation-list", "reservation-change", "lan-dns-status", "lan-dns-save", "lan-dns-clear":
+	case "lan-status", "lan-apply", "lan-confirm", "reservation-list", "reservation-change", "lan-dns-status", "lan-dns-save", "lan-dns-clear", "firewall-status", "firewall-apply":
 		if request.Interface != "" || request.StaticWANConfig != nil || request.PPPoEConfig != nil || request.WANLineConfig != nil ||
 			(request.Operation == "lan-apply") != (request.LANConfig != nil) ||
 			(request.Operation == "lan-dns-save") != (request.DNSConfig != nil) ||
@@ -576,6 +578,22 @@ func writeResponse(writer io.Writer, response Response) {
 
 func handleLANRequest(ctx context.Context, manager *networkinventory.StaticWANManager, request Request) Response {
 	switch request.Operation {
+	case "firewall-status":
+		result, err := manager.FirewallStatus(ctx)
+		if err != nil {
+			return Response{Error: "firewall_unavailable"}
+		}
+		return Response{Firewall: &result}
+	case "firewall-apply":
+		result, err := manager.ApplyFirewall(ctx)
+		if errors.Is(err, networkinventory.ErrStaticWANPending) {
+			return Response{Error: "network_change_pending"}
+		}
+		if err != nil {
+			log.Printf("apply firewall: %v", err)
+			return Response{Error: "firewall_unavailable"}
+		}
+		return Response{StaticWANTransaction: &result}
 	case "lan-dns-status":
 		result, err := manager.LANDNSStatus()
 		if err != nil {

@@ -371,12 +371,16 @@ func (m *StaticWANManager) RecoverLAN(ctx context.Context) error {
 }
 
 func (m *StaticWANManager) lanNetAdmin(ctx context.Context, argv ...string) error {
-	args := []string{"--system", "--quiet", "--wait", "--collect", "--property=Type=oneshot",
+	_, err := m.runNetAdmin(ctx, argv...)
+	return err
+}
+
+func (m *StaticWANManager) runNetAdmin(ctx context.Context, argv ...string) (string, error) {
+	args := []string{"--system", "--quiet", "--wait", "--pipe", "--collect", "--property=Type=oneshot",
 		"--property=CapabilityBoundingSet=CAP_NET_ADMIN", "--property=NoNewPrivileges=yes",
 		"--property=ProtectSystem=strict", "--property=ProtectHome=yes",
 		"--property=RestrictAddressFamilies=AF_UNIX AF_NETLINK", "--"}
-	_, err := m.run(ctx, "/usr/bin/systemd-run", append(args, argv...)...)
-	return err
+	return m.run(ctx, "/usr/bin/systemd-run", append(args, argv...)...)
 }
 
 func renderLANFirewall(config LANConfig, routerOnly bool) []byte {
@@ -444,6 +448,17 @@ func (m *StaticWANManager) syncLAN(ctx context.Context, config *LANConfig, recon
 		}
 		if _, err := m.run(ctx, "/usr/bin/networkctl", "reconfigure", LANInterface); err != nil {
 			return err
+		}
+	}
+	if config != nil {
+		state, err := m.readFirewall()
+		if err != nil {
+			return err
+		}
+		if state != nil {
+			if err := m.installFirewallRules(ctx, *config); err != nil {
+				return err
+			}
 		}
 	}
 	dns := filepath.Join(state, "lan-dnsmasq.conf")
