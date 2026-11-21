@@ -14,23 +14,12 @@ import (
 
 // RunWANDiagnostic uses the configured networkd IPv4 Ethernet uplink.
 // All packets are bound to that link, independent of the host's default WAN.
-func RunWANDiagnostic(ctx context.Context) (WANDiagnostic, error) {
-	device := StaticWANInterface
-	status, err := ReadActiveNetworkStatusWith(ctx, device, runNetworkctl)
-	if err != nil {
-		return WANDiagnostic{}, err
-	}
-	// A managed VLAN rides on the physical WAN. Check physical carrier first.
-	if status.LinkState == "carrier" || status.LinkState == "degraded-carrier" {
-		if vlan, err := net.InterfaceByName(wanVLANName); err == nil && vlan.Flags&net.FlagUp != 0 {
-			device = vlan.Name
-			status, err = ReadActiveNetworkStatusWith(ctx, device, runNetworkctl)
-			if err != nil {
-				return WANDiagnostic{}, err
-			}
-		}
-	}
-	var gateway string
+func RunWANDiagnostic(ctx context.Context, state WANProbeState) (WANDiagnostic, error) {
+	device, status := state.Interface, state.Status
+	var (
+		gateway string
+		err     error
+	)
 	if len(status.Addresses) != 0 {
 		gateway, err = diagnosticGateway(ctx, device)
 		if err != nil {

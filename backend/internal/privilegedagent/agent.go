@@ -41,6 +41,7 @@ type Request struct {
 
 // Response contains harmless status data or a stable error code.
 type Response struct {
+	WANProbeState        *networkinventory.WANProbeState        `json:"wan_probe_state,omitempty"`
 	RoutingStatus        *networkinventory.RoutingStatus        `json:"routing_status,omitempty"`
 	RuleSettings         *networkinventory.FirewallRulesStatus  `json:"firewall_rules,omitempty"`
 	Firewall             *networkinventory.FirewallStatus       `json:"firewall,omitempty"`
@@ -395,6 +396,19 @@ func handleConnectionWithAllOperations(
 			return
 		}
 		writeResponse(connection, Response{DHCPStatus: &status})
+	case "wan-probe-state":
+		if request.Interface != "" || request.StaticWANConfig != nil || request.PPPoEConfig != nil || request.TransactionID != "" {
+			writeResponse(connection, Response{Error: "invalid_request"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		state, err := networkinventory.ReadWANProbeState(ctx)
+		if err != nil {
+			writeResponse(connection, Response{Error: "network_status_unavailable"})
+			return
+		}
+		writeResponse(connection, Response{WANProbeState: &state})
 	case "wan-line-status", "wan-line-apply":
 		if request.Interface != "" || request.StaticWANConfig != nil || request.PPPoEConfig != nil ||
 			request.TransactionID != "" || (request.Operation == "wan-line-apply") != (request.WANLineConfig != nil) {
