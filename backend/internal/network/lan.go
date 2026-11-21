@@ -222,6 +222,15 @@ func (m *StaticWANManager) ApplyLAN(ctx context.Context, config LANConfig) (Stat
 		if conflict := overlappingLAN(config, upstream); conflict != nil {
 			return conflict
 		}
+		_, reservations, err := m.readReservations()
+		if err != nil {
+			return err
+		}
+		for _, reservation := range reservations {
+			if !validReservationAddress(config, reservation.Address) {
+				return ErrReservationConflict
+			}
+		}
 		data, exists, _, err := readStaticWANFile(m.lanPath())
 		if err != nil {
 			return err
@@ -421,8 +430,17 @@ func (m *StaticWANManager) syncLAN(ctx context.Context, config *LANConfig, recon
 		return errors.Join(removeRegularFile(rules), removeRegularFile(dns))
 	}
 	address := netip.MustParsePrefix(config.Address).Addr()
+	hosts := m.reservationPath()
+	if _, exists, _, err := readStaticWANFile(hosts); err != nil {
+		return err
+	} else if !exists {
+		if err := writeAtomicFile(hosts, nil, 0644); err != nil {
+			return err
+		}
+	}
 	content := fmt.Appendf(nil, "interface=%s\nexcept-interface=lo\nbind-dynamic\nuser=nobody\ngroup=nogroup\nlocal=/%s/\nhost-record=%s,%s\ndhcp-authoritative\ndhcp-range=%s,%s,12h\ndhcp-option=option:router,%s\ndhcp-option=option:dns-server,%s\ndhcp-leasefile=/var/lib/debian-router-lan/leases/dnsmasq.leases\n",
 		LANInterface, LANHostname, LANHostname, address, config.PoolStart, config.PoolEnd, address, address)
+	content = fmt.Appendf(content, "dhcp-hostsfile=%s\n", hosts)
 	if err := writeAtomicFile(dns, content, 0600); err != nil {
 		return err
 	}
