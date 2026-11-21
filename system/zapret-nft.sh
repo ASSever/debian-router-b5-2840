@@ -34,6 +34,11 @@ done
 exec /usr/sbin/nft -f - <<EOF
 destroy table inet b5_zapret
 table inet b5_zapret {
+    chain generated_output {
+        type filter hook output priority raw; policy accept;
+        # nfqws generates these from packets that already passed SNAT.
+        oifname "$wan" meta mark & 0x40000000 != 0 counter notrack
+    }
     chain mark_forwarded {
         type filter hook forward priority 10; policy accept;
         iifname "$lan" oifname "$wan" ct direction original ct original packets 1-12 tcp dport {80,443,2053,2083,2087,2096,8443} meta mark set meta mark | 0x02000000
