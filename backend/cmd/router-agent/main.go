@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"strconv"
@@ -26,6 +27,24 @@ func run(arguments []string) error {
 	socketPath := os.Getenv("ROUTER_AGENT_SOCKET")
 	if socketPath == "" {
 		socketPath = privilegedagent.DefaultSocketPath()
+	}
+	if len(arguments) == 1 && arguments[0] == "proxy-ready" {
+		deadline := time.Now().Add(3 * time.Second)
+		ready := 0
+		for time.Now().Before(deadline) {
+			connection, err := net.DialTimeout("tcp4", "127.0.0.1:11080", 100*time.Millisecond)
+			if err == nil {
+				_ = connection.Close()
+				ready++
+				if ready == 3 {
+					return nil
+				}
+			} else {
+				ready = 0
+			}
+			time.Sleep(60 * time.Millisecond)
+		}
+		return errors.New("sing-box listener did not become ready")
 	}
 
 	if len(arguments) == 2 && arguments[0] == "request" {

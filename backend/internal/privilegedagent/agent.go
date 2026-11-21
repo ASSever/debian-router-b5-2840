@@ -14,6 +14,7 @@ import (
 	"time"
 
 	networkinventory "github.com/ASSever/debian-router-b5-2840/backend/internal/network"
+	"github.com/ASSever/debian-router-b5-2840/backend/internal/proxy"
 )
 
 const (
@@ -25,6 +26,7 @@ const (
 
 // Request is the only message accepted by the privileged agent.
 type Request struct {
+	ProxyProfile      *proxy.ProfileChange                `json:"proxy_profile,omitempty"`
 	RoutingConfig     *networkinventory.RoutingConfig     `json:"routing_config,omitempty"`
 	FirewallRules     *networkinventory.FirewallRules     `json:"firewall_rules,omitempty"`
 	DNSConfig         *networkinventory.LANDNSConfig      `json:"dns_config,omitempty"`
@@ -41,6 +43,7 @@ type Request struct {
 
 // Response contains harmless status data or a stable error code.
 type Response struct {
+	ProxyProfile         *proxy.Profile                         `json:"proxy_profile,omitempty"`
 	WANProbeState        *networkinventory.WANProbeState        `json:"wan_probe_state,omitempty"`
 	RoutingStatus        *networkinventory.RoutingStatus        `json:"routing_status,omitempty"`
 	RuleSettings         *networkinventory.FirewallRulesStatus  `json:"firewall_rules,omitempty"`
@@ -58,6 +61,8 @@ type Response struct {
 	Agent                string                                 `json:"agent,omitempty"`
 	Error                string                                 `json:"error,omitempty"`
 }
+
+var proxyProfiles = proxy.NewProfileManager("/var/lib/debian-router-agent/proxy-routing")
 
 type staticWANOperations interface {
 	Apply(context.Context, networkinventory.StaticWANConfig) (networkinventory.StaticWANTransaction, error)
@@ -96,6 +101,9 @@ func Serve(ctx context.Context, socketPath string, allowedGID uint32) error {
 	}
 	if err := pppoe.RecoverPending(ctx); err != nil {
 		return fmt.Errorf("recover pending PPPoE configuration: %w", err)
+	}
+	if err := proxyProfiles.Recover(ctx); err != nil {
+		log.Printf("restore proxy profile: %v", err)
 	}
 	go manager.MaintainFirewall(ctx)
 	return serveWithAllOperations(ctx, socketPath, allowedGID, networkinventory.ReadDHCPStatus, manager, pppoe)
@@ -348,6 +356,7 @@ func handleConnectionWithAllOperations(
 		return
 	}
 	if request.DNSConfig != nil && request.Operation != "lan-dns-save" ||
+		request.ProxyProfile != nil && request.Operation != "proxy-profile-apply" ||
 		request.RoutingConfig != nil && request.Operation != "routing-apply" ||
 		request.FirewallRules != nil && request.Operation != "firewall-rules-apply" ||
 		request.ReservationChange != nil && request.Operation != "reservation-change" ||
@@ -357,6 +366,30 @@ func handleConnectionWithAllOperations(
 		return
 	}
 	switch request.Operation {
+	case "proxy-profile-status", "proxy-profile-apply":
+		if (request.Operation == "proxy-profile-apply") != (request.ProxyProfile != nil) ||
+			request.Interface != "" || request.StaticWANConfig != nil || request.PPPoEConfig != nil ||
+			request.TransactionID != "" {
+			writeResponse(connection, Response{Error: "invalid_request"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), connectionTimeout)
+		defer cancel()
+		if request.ProxyProfile != nil {
+			if err := proxyProfiles.Apply(ctx, *request.ProxyProfile); err != nil {
+				writeResponse(connection, Response{Error: err.Error()})
+				return
+			}
+			writeResponse(connection, Response{ProxyProfile: &request.ProxyProfile.Profile})
+			return
+		}
+		profile, err := proxyProfiles.Status()
+		if err != nil {
+			writeResponse(connection, Response{Error: err.Error()})
+			return
+		}
+		writeResponse(connection, Response{ProxyProfile: &profile})
+		return
 	case "lan-status", "lan-apply", "lan-confirm", "reservation-list", "reservation-change", "lan-dns-status", "lan-dns-save", "lan-dns-clear",
 		"firewall-status", "firewall-apply", "firewall-rules-status", "firewall-rules-apply", "routing-status", "routing-apply":
 		if request.Interface != "" || request.StaticWANConfig != nil || request.PPPoEConfig != nil || request.WANLineConfig != nil ||

@@ -116,12 +116,15 @@ if [ "$mode" != --check ]; then
         "$package/web/index.html" | sort)
     lan_listing=$(printf '%s\n%s\n' "$pppoe_listing" "$package/LAN_SUPPORT" | sort)
     sing_box_listing=$(printf '%s\n%s\n' "$lan_listing" "$package/SING_BOX_SUPPORT" | sort)
+    proxy_routing_listing=$(printf '%s\n%s\n' "$sing_box_listing" "$package/PROXY_ROUTING_SUPPORT" | sort)
     actual_listing=$(tar -tzf "$stage/$archive" | sort)
     has_agent=no
     has_pppoe=no
     has_lan=no
     has_sing_box=no
+    has_proxy_routing=no
     case "$actual_listing" in
+        "$proxy_routing_listing") has_agent=yes; has_ui=yes; has_pppoe=yes; has_lan=yes; has_sing_box=yes; has_proxy_routing=yes ;;
         "$sing_box_listing") has_agent=yes; has_ui=yes; has_pppoe=yes; has_lan=yes; has_sing_box=yes ;;
         "$lan_listing") has_agent=yes; has_ui=yes; has_pppoe=yes; has_lan=yes ;;
         "$pppoe_listing") has_agent=yes; has_ui=yes; has_pppoe=yes ;;
@@ -186,6 +189,13 @@ if [ "$mode" != --check ]; then
             ! printf '%s\n' "$sing_box_hash" | grep -Eq '^[0-9a-f]{64}$' ||
             ! printf '%s\n' "$sing_box_version" "$sing_box_hash" | cmp -s - "$sing_box_marker"; then
             echo 'Invalid sing-box version or SHA-256.' >&2
+            exit 5
+        fi
+    fi
+    if [ "$has_proxy_routing" = yes ]; then
+        proxy_marker=$stage/$package/PROXY_ROUTING_SUPPORT
+        if [ ! -f "$proxy_marker" ] || [ -L "$proxy_marker" ] || [ "$(cat "$proxy_marker")" != profile-v1 ]; then
+            echo 'Invalid proxy routing support marker.' >&2
             exit 5
         fi
     fi
@@ -259,6 +269,13 @@ if [ "$mode" != --check ]; then
             echo 'Installed sing-box marker differs from verified release.' >&2
             exit 6
         fi
+        if [ "$has_proxy_routing" = yes ] && {
+            [ -L "$release_dir/PROXY_ROUTING_SUPPORT" ] ||
+            ! cmp -s "$proxy_marker" "$release_dir/PROXY_ROUTING_SUPPORT";
+        }; then
+            echo 'Installed proxy routing marker differs from verified release.' >&2
+            exit 6
+        fi
     else
         release_tmp=$prefix/releases/.new-$package_version-$$
         install -d -m 0755 "$release_tmp"
@@ -275,6 +292,9 @@ if [ "$mode" != --check ]; then
         fi
         if [ "$has_sing_box" = yes ]; then
             install -m 0644 "$sing_box_marker" "$release_tmp/SING_BOX_SUPPORT"
+        fi
+        if [ "$has_proxy_routing" = yes ]; then
+            install -m 0644 "$proxy_marker" "$release_tmp/PROXY_ROUTING_SUPPORT"
         fi
         if [ "$has_ui" = yes ]; then
             install -d -m 0755 "$release_tmp/web" "$release_tmp/web/assets"
@@ -444,7 +464,19 @@ EOF
             echo 'The sing-box config must be a regular file owned by root with mode 0600.' >&2
             return 1
         fi
-        if ! "$sing_box_bin" check -c "$candidate_config" >/dev/null 2>&1; then
+        loaded_config=$sing_box_config
+        validation_config=$candidate_config
+        if [ "$has_proxy_routing" = yes ]; then
+            proxy_root=/var/lib/debian-router-agent/proxy-routing
+            if [ ! -e "$proxy_root/active" ] && [ ! -L "$proxy_root/active" ]; then
+                install -d -m 0700 "$proxy_root" "$proxy_root/initial" || return 1
+                install -m 0600 "$candidate_config" "$proxy_root/initial/config.json" || return 1
+                ln -s initial "$proxy_root/active" || return 1
+            fi
+            loaded_config=$proxy_root/active/config.json
+            validation_config=$loaded_config
+        fi
+        if ! "$sing_box_bin" check -c "$validation_config" >/dev/null 2>&1; then
             echo 'sing-box rejected its configuration.' >&2
             return 1
         fi
@@ -458,7 +490,7 @@ After=network.target
 Type=exec
 DynamicUser=yes
 UMask=0077
-LoadCredential=config.json:$sing_box_config
+LoadCredential=config.json:$loaded_config
 ExecStartPre=:/bin/sh -c '"\$1" check -c "\$2" >/dev/null 2>&1' sh $sing_box_bin %d/config.json
 ExecStart=$sing_box_bin run -c %d/config.json
 Restart=on-failure
@@ -477,6 +509,9 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 [Install]
 WantedBy=multi-user.target
 EOF
+        if [ "$has_proxy_routing" = yes ]; then
+            sed -i "/^ExecStart=/a ExecStartPost=$release_dir/router-agent proxy-ready\nTimeoutStartSec=5s\nTimeoutStopSec=2s" "$stage/$sing_box_unit" || return 1
+        fi
         systemd-analyze verify "$stage/$sing_box_unit" || return 1
         if [ -f "$sing_box_service" ]; then
             cp -p "$sing_box_service" "$stage/previous-sing-box.service" || return 1
