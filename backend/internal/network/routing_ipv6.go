@@ -181,7 +181,15 @@ func syncIPv6File(path string, content []byte) (bool, error) {
 		return true, removeRegularFile(path)
 	}
 	parent := filepath.Dir(path)
-	if err := os.MkdirAll(parent, 0755); err != nil {
+	switch err := os.Mkdir(parent, 0755); {
+	case err == nil:
+		// The agent's umask is 0077. networkd reads these profiles as a
+		// separate unprivileged user and needs to traverse the directory.
+		if err := os.Chmod(parent, 0755); err != nil {
+			_ = os.Remove(parent)
+			return false, err
+		}
+	case !errors.Is(err, os.ErrExist):
 		return false, err
 	}
 	info, err := os.Lstat(parent)
@@ -431,7 +439,7 @@ func (m *StaticWANManager) ipv6Ready(ctx context.Context, config RoutedIPv6) boo
 		return false
 	}
 	for _, item := range ipv6Addresses(config) {
-		prefixes, err := interfacePrefixes(item.device)
+		prefixes, err := m.usableIPv6Addresses(ctx, item.device)
 		if err != nil {
 			return false
 		}
@@ -458,6 +466,33 @@ func (m *StaticWANManager) ipv6Ready(ctx context.Context, config RoutedIPv6) boo
 		}
 	}
 	return false
+}
+
+func (m *StaticWANManager) usableIPv6Addresses(ctx context.Context, device string) ([]netip.Prefix, error) {
+	output, err := m.run(ctx, ipBinary, "-6", "-json", "address", "show", "dev", device)
+	if err != nil {
+		return nil, err
+	}
+	var links []struct {
+		Addresses []struct {
+			IP        netip.Addr `json:"local"`
+			Length    int        `json:"prefixlen"`
+			Tentative bool       `json:"tentative"`
+			DADFailed bool       `json:"dadfailed"`
+		} `json:"addr_info"`
+	}
+	if err := json.Unmarshal([]byte(output), &links); err != nil {
+		return nil, err
+	}
+	var result []netip.Prefix
+	for _, link := range links {
+		for _, address := range link.Addresses {
+			if address.IP.Is6() && !address.Tentative && !address.DADFailed {
+				result = append(result, netip.PrefixFrom(address.IP, address.Length))
+			}
+		}
+	}
+	return result, nil
 }
 
 type ipv6Address struct {
