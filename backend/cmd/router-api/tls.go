@@ -44,7 +44,7 @@ func loadTLSCertificate(stateDir string) (string, string, tls.Certificate, error
 		return "", "", tls.Certificate{}, err
 	}
 	if os.Getenv(tlsCertEnvironment) == "" {
-		if err := ensureLocalCertificate(stateDir, certPath, keyPath); err != nil {
+		if err := ensureLocalCertificate(stateDir, certPath, keyPath, "localhost"); err != nil {
 			return "", "", tls.Certificate{}, err
 		}
 	}
@@ -58,11 +58,11 @@ func loadTLSCertificate(stateDir string) (string, string, tls.Certificate, error
 	return certPath, keyPath, certificate, nil
 }
 
-func ensureLocalCertificate(stateDir, certPath, keyPath string) error {
+func ensureLocalCertificate(stateDir, certPath, keyPath, hostname string) error {
 	tlsDir := filepath.Dir(certPath)
 	info, err := os.Stat(tlsDir)
 	if errors.Is(err, os.ErrNotExist) {
-		if err := createLocalCertificate(stateDir, tlsDir); err != nil {
+		if err := createLocalCertificate(stateDir, tlsDir, hostname); err != nil {
 			return fmt.Errorf("create local TLS certificate: %w", err)
 		}
 		return nil
@@ -87,7 +87,7 @@ func ensureLocalCertificate(stateDir, certPath, keyPath string) error {
 	return nil
 }
 
-func createLocalCertificate(stateDir, tlsDir string) error {
+func createLocalCertificate(stateDir, tlsDir, hostname string) error {
 	if err := os.MkdirAll(stateDir, 0700); err != nil {
 		return err
 	}
@@ -111,15 +111,17 @@ func createLocalCertificate(stateDir, tlsDir string) error {
 	now := time.Now()
 	template := x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "localhost"},
+		Subject:               pkix.Name{CommonName: hostname},
 		NotBefore:             now.Add(-5 * time.Minute),
 		NotAfter:              now.AddDate(10, 0, 0),
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:              []string{"localhost"},
-		IPAddresses:           []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
+		DNSNames:              []string{hostname},
+	}
+	if hostname == "localhost" {
+		template.IPAddresses = []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback}
 	}
 	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
 	if err != nil {

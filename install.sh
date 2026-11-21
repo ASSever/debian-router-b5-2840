@@ -114,10 +114,13 @@ if [ "$mode" != --check ]; then
         "$package/router-agent" "$package/web/" "$package/web/assets/" \
         "$package/web/assets/app.css" "$package/web/assets/app.js" \
         "$package/web/index.html" | sort)
+    lan_listing=$(printf '%s\n%s\n' "$pppoe_listing" "$package/LAN_SUPPORT" | sort)
     actual_listing=$(tar -tzf "$stage/$archive" | sort)
     has_agent=no
     has_pppoe=no
+    has_lan=no
     case "$actual_listing" in
+        "$lan_listing") has_agent=yes; has_ui=yes; has_pppoe=yes; has_lan=yes ;;
         "$pppoe_listing") has_agent=yes; has_ui=yes; has_pppoe=yes ;;
         "$agent_listing") has_agent=yes; has_ui=yes ;;
         "$ui_listing") has_ui=yes ;;
@@ -157,6 +160,14 @@ if [ "$mode" != --check ]; then
         [ "$(cat "$stage/$package/PPPOE_SUPPORT")" != pppd ];
     }; then
         echo 'Invalid PPPoE support marker.' >&2
+        exit 5
+    fi
+
+    if [ "$has_lan" = yes ] && {
+        [ ! -f "$stage/$package/LAN_SUPPORT" ] || [ -L "$stage/$package/LAN_SUPPORT" ] ||
+        [ "$(cat "$stage/$package/LAN_SUPPORT")" != 'dnsmasq-base nftables' ];
+    }; then
+        echo 'Invalid LAN support marker.' >&2
         exit 5
     fi
 
@@ -213,9 +224,16 @@ if [ "$mode" != --check ]; then
             echo 'Installed PPPoE marker differs from verified release.' >&2
             exit 6
         fi
+        if [ "$has_lan" = yes ] && {
+            [ ! -f "$release_dir/LAN_SUPPORT" ] || [ -L "$release_dir/LAN_SUPPORT" ] ||
+            ! cmp -s "$stage/$package/LAN_SUPPORT" "$release_dir/LAN_SUPPORT";
+        }; then
+            echo 'Installed LAN marker differs from verified release.' >&2
+            exit 6
+        fi
     else
         release_tmp=$prefix/releases/.new-$package_version-$$
-        mkdir "$release_tmp"
+        install -d -m 0755 "$release_tmp"
         install -m 0755 "$stage/$package/router-api" "$release_tmp/router-api"
         printf '%s\n' "$package_version" > "$release_tmp/VERSION"
         if [ "$has_agent" = yes ]; then
@@ -224,8 +242,11 @@ if [ "$mode" != --check ]; then
         if [ "$has_pppoe" = yes ]; then
             install -m 0644 "$stage/$package/PPPOE_SUPPORT" "$release_tmp/PPPOE_SUPPORT"
         fi
+        if [ "$has_lan" = yes ]; then
+            install -m 0644 "$stage/$package/LAN_SUPPORT" "$release_tmp/LAN_SUPPORT"
+        fi
         if [ "$has_ui" = yes ]; then
-            mkdir -p "$release_tmp/web/assets"
+            install -d -m 0755 "$release_tmp/web" "$release_tmp/web/assets"
             install -m 0644 "$stage/$package/web/index.html" "$release_tmp/web/index.html"
             install -m 0644 "$stage/$package/web/assets/app.js" "$release_tmp/web/assets/app.js"
             install -m 0644 "$stage/$package/web/assets/app.css" "$release_tmp/web/assets/app.css"
@@ -237,6 +258,13 @@ if [ "$mode" != --check ]; then
     if [ "$has_pppoe" = yes ] && [ ! -x /usr/sbin/pppd ]; then
         if ! apt-get install -y ppp; then
             echo 'Could not install the Debian ppp package; active release was not changed.' >&2
+            exit 7
+        fi
+    fi
+
+    if [ "$has_lan" = yes ] && { [ ! -x /usr/sbin/dnsmasq ] || [ ! -x /usr/sbin/nft ]; }; then
+        if ! apt-get install -y dnsmasq-base nftables; then
+            echo 'Could not install LAN dependencies; active release was not changed.' >&2
             exit 7
         fi
     fi
@@ -394,6 +422,9 @@ PrivateTmp=yes
 [Install]
 WantedBy=multi-user.target
 EOF
+    fi
+    if [ "$has_lan" = yes ]; then
+        sed -i '/^Environment=ROUTER_AGENT_SOCKET=/a Environment=ROUTER_LAN_HTTPS=yes' "$unit_tmp"
     fi
     if [ ! -f "$service" ] || ! cmp -s "$unit_tmp" "$service"; then
         unit_changed=yes

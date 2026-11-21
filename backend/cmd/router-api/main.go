@@ -56,6 +56,11 @@ func main() {
 
 	stop, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	if os.Getenv("ROUTER_LAN_HTTPS") == "yes" {
+		if err := serveLAN(stop, dataDir, server.Handler); err != nil {
+			log.Printf("LAN HTTPS unavailable: %v", err)
+		}
+	}
 	go func() {
 		<-stop.Done()
 		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
