@@ -2,6 +2,9 @@
 # Run from the checkout root with a POSIX shell.
 set -eu
 sh -n install.sh
+sh -n scripts/package.sh
+sh -n system/zapret-alt11.sh
+sh -n system/zapret-nft.sh
 sh -n tests/network-rollback-fixture.sh
 sh install.sh --help | grep -F 'Usage: sh install.sh' >/dev/null
 expect_exit() {
