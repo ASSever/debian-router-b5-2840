@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import ProxySubscriptionPanel from "./ProxySubscriptionPanel";
 import WANLinePanel from "./WANLinePanel";
 import LANPanel from "./LANPanel";
 import DHCPReservationsPanel from "./DHCPReservationsPanel";
@@ -556,6 +557,7 @@ export default function StaticWANPanel() {
           <DHCPReservationsPanel />
           <LANDNSPanel />
           <FirewallPanel />
+          <ProxySubscriptionPanel />
         </>
       )}
 

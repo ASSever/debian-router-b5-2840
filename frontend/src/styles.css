@@ -347,7 +347,8 @@ h1 {
   grid-column: 1 / -1;
 }
 
-.static-wan-field input {
+.static-wan-field input,
+.static-wan-field textarea {
   width: 100%;
   min-height: 44px;
   padding: 0 12px;
@@ -359,7 +360,13 @@ h1 {
   font-weight: 500;
 }
 
-.static-wan-field input:focus-visible {
+.static-wan-field textarea {
+  padding: 10px 12px;
+  resize: vertical;
+}
+
+.static-wan-field input:focus-visible,
+.static-wan-field textarea:focus-visible {
   outline: 3px solid rgb(36 99 235 / 25%);
   outline-offset: 2px;
 }
