@@ -115,11 +115,14 @@ if [ "$mode" != --check ]; then
         "$package/web/assets/app.css" "$package/web/assets/app.js" \
         "$package/web/index.html" | sort)
     lan_listing=$(printf '%s\n%s\n' "$pppoe_listing" "$package/LAN_SUPPORT" | sort)
+    sing_box_listing=$(printf '%s\n%s\n' "$lan_listing" "$package/SING_BOX_SUPPORT" | sort)
     actual_listing=$(tar -tzf "$stage/$archive" | sort)
     has_agent=no
     has_pppoe=no
     has_lan=no
+    has_sing_box=no
     case "$actual_listing" in
+        "$sing_box_listing") has_agent=yes; has_ui=yes; has_pppoe=yes; has_lan=yes; has_sing_box=yes ;;
         "$lan_listing") has_agent=yes; has_ui=yes; has_pppoe=yes; has_lan=yes ;;
         "$pppoe_listing") has_agent=yes; has_ui=yes; has_pppoe=yes ;;
         "$agent_listing") has_agent=yes; has_ui=yes ;;
@@ -171,12 +174,30 @@ if [ "$mode" != --check ]; then
         exit 5
     fi
 
+    if [ "$has_sing_box" = yes ]; then
+        sing_box_marker=$stage/$package/SING_BOX_SUPPORT
+        if [ ! -f "$sing_box_marker" ] || [ -L "$sing_box_marker" ]; then
+            echo 'Invalid sing-box support marker.' >&2
+            exit 5
+        fi
+        sing_box_version=$(sed -n '1p' "$sing_box_marker")
+        sing_box_hash=$(sed -n '2p' "$sing_box_marker")
+        if ! printf '%s\n' "$sing_box_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' ||
+            ! printf '%s\n' "$sing_box_hash" | grep -Eq '^[0-9a-f]{64}$' ||
+            ! printf '%s\n' "$sing_box_version" "$sing_box_hash" | cmp -s - "$sing_box_marker"; then
+            echo 'Invalid sing-box version or SHA-256.' >&2
+            exit 5
+        fi
+    fi
+
     prefix=/opt/debian-router-b5-2840
     release_dir=$prefix/releases/$package_version
     service=/etc/systemd/system/debian-router-api.service
     agent_service=/etc/systemd/system/debian-router-agent.service
     pppoe_service=/etc/systemd/system/debian-router-pppoe.service
     agent_current=$prefix/agent-current
+    exec 9>/run/lock/debian-router-install.lock
+    flock -x 9
     mkdir -p "$prefix/releases"
     previous_release=
     if [ -L "$prefix/current" ]; then
@@ -231,6 +252,13 @@ if [ "$mode" != --check ]; then
             echo 'Installed LAN marker differs from verified release.' >&2
             exit 6
         fi
+        if [ "$has_sing_box" = yes ] && {
+            [ ! -f "$release_dir/SING_BOX_SUPPORT" ] || [ -L "$release_dir/SING_BOX_SUPPORT" ] ||
+            ! cmp -s "$sing_box_marker" "$release_dir/SING_BOX_SUPPORT";
+        }; then
+            echo 'Installed sing-box marker differs from verified release.' >&2
+            exit 6
+        fi
     else
         release_tmp=$prefix/releases/.new-$package_version-$$
         install -d -m 0755 "$release_tmp"
@@ -244,6 +272,9 @@ if [ "$mode" != --check ]; then
         fi
         if [ "$has_lan" = yes ]; then
             install -m 0644 "$stage/$package/LAN_SUPPORT" "$release_tmp/LAN_SUPPORT"
+        fi
+        if [ "$has_sing_box" = yes ]; then
+            install -m 0644 "$sing_box_marker" "$release_tmp/SING_BOX_SUPPORT"
         fi
         if [ "$has_ui" = yes ]; then
             install -d -m 0755 "$release_tmp/web" "$release_tmp/web/assets"
@@ -368,6 +399,117 @@ if [ "$mode" != --check ]; then
             esac
             ;;
     esac
+
+    sing_box_unit=debian-router-sing-box.service
+    sing_box_service=/etc/systemd/system/$sing_box_unit
+    sing_box_config=/etc/debian-router-sing-box.json
+    sing_box_unit_changed=no
+    sing_box_config_created=no
+    sing_box_was_enabled=no
+    sing_box_was_active=no
+    sing_box_activation_attempted=no
+
+    prepare_sing_box() {
+        vendor_dir=$prefix/sing-box/$sing_box_version
+        sing_box_bin=$vendor_dir/sing-box
+        if [ ! -x "$sing_box_bin" ]; then
+            upstream_package=sing-box-$sing_box_version-linux-amd64
+            upstream_url=https://github.com/SagerNet/sing-box/releases/download/v$sing_box_version
+            /usr/lib/apt/apt-helper download-file "$upstream_url/$upstream_package.tar.gz" \
+                "$stage/sing-box.tar.gz" "SHA256:$sing_box_hash" || return 1
+            tar -xOzf "$stage/sing-box.tar.gz" "$upstream_package/sing-box" > "$stage/sing-box" || return 1
+            install -d -m 0755 "$vendor_dir" || return 1
+            install -m 0755 "$stage/sing-box" "$sing_box_bin.new.$$" || return 1
+            mv -Tf "$sing_box_bin.new.$$" "$sing_box_bin" || return 1
+        fi
+
+        candidate_config=$sing_box_config
+        if [ ! -e "$sing_box_config" ] && [ ! -L "$sing_box_config" ]; then
+            candidate_config=$stage/sing-box.json
+            cat > "$candidate_config" <<'EOF' || return 1
+{
+  "log": { "level": "warn" },
+  "inbounds": [{
+    "type": "mixed",
+    "tag": "local-proxy",
+    "listen": "127.0.0.1",
+    "listen_port": 11080
+  }],
+  "outbounds": [{ "type": "direct", "tag": "direct" }],
+  "route": { "final": "direct" }
+}
+EOF
+        elif [ ! -f "$sing_box_config" ] || [ -L "$sing_box_config" ] ||
+            [ "$(stat -c '%u:%a' "$sing_box_config")" != '0:600' ]; then
+            echo 'The sing-box config must be a regular file owned by root with mode 0600.' >&2
+            return 1
+        fi
+        if ! "$sing_box_bin" check -c "$candidate_config" >/dev/null 2>&1; then
+            echo 'sing-box rejected its configuration.' >&2
+            return 1
+        fi
+
+        cat > "$stage/$sing_box_unit" <<EOF || return 1
+[Unit]
+Description=Debian Router sing-box Proxy
+After=network.target
+
+[Service]
+Type=exec
+DynamicUser=yes
+UMask=0077
+LoadCredential=config.json:$sing_box_config
+ExecStartPre=:/bin/sh -c '"\$1" check -c "\$2" >/dev/null 2>&1' sh $sing_box_bin %d/config.json
+ExecStart=$sing_box_bin run -c %d/config.json
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        systemd-analyze verify "$stage/$sing_box_unit" || return 1
+        if [ -f "$sing_box_service" ]; then
+            cp -p "$sing_box_service" "$stage/previous-sing-box.service" || return 1
+        fi
+    }
+
+    activate_sing_box() {
+        sing_box_activation_attempted=yes
+        if [ "$candidate_config" != "$sing_box_config" ]; then
+            install -m 0600 "$candidate_config" "$sing_box_config.new.$$" || return 1
+            mv -Tf "$sing_box_config.new.$$" "$sing_box_config" || return 1
+            sing_box_config_created=yes
+        fi
+        if ! cmp -s "$stage/$sing_box_unit" "$sing_box_service"; then
+            install -m 0644 "$stage/$sing_box_unit" "$sing_box_service.new.$$" || return 1
+            mv -Tf "$sing_box_service.new.$$" "$sing_box_service" || return 1
+            sing_box_unit_changed=yes
+            systemctl daemon-reload || return 1
+        fi
+        systemctl enable "$sing_box_unit" || return 1
+        if [ "$sing_box_unit_changed" = yes ]; then
+            systemctl restart "$sing_box_unit" || return 1
+        else
+            systemctl start "$sing_box_unit" || return 1
+        fi
+        sleep 1
+        systemctl is-active --quiet "$sing_box_unit"
+    }
+
+    if [ "$has_sing_box" = yes ] && ! prepare_sing_box; then
+        echo 'Could not prepare sing-box; the active release was not changed.' >&2
+        exit 7
+    fi
 
     unit_tmp=$stage/debian-router-api.service
     if [ "$has_agent" = yes ]; then
@@ -514,6 +656,26 @@ EOF
     fi
 
     rollback_install() {
+        if [ "$sing_box_activation_attempted" = yes ]; then
+            if [ "$sing_box_was_enabled" = no ]; then
+                systemctl disable "$sing_box_unit" || :
+            fi
+            if [ "$sing_box_unit_changed" = yes ]; then
+                if [ -f "$stage/previous-sing-box.service" ]; then
+                    mv -Tf "$stage/previous-sing-box.service" "$sing_box_service"
+                else
+                    systemctl stop "$sing_box_unit" || :
+                    rm -f -- "$sing_box_service"
+                fi
+                systemctl daemon-reload || :
+            fi
+            if [ "$sing_box_was_active" = yes ]; then
+                if [ "$sing_box_unit_changed" = yes ]; then systemctl restart "$sing_box_unit" || :; fi
+            elif [ -f "$sing_box_service" ]; then
+                systemctl stop "$sing_box_unit" || :
+            fi
+            if [ "$sing_box_config_created" = yes ]; then rm -f -- "$sing_box_config"; fi
+        fi
         if [ -n "$previous_release" ]; then
             ln -s "$previous_release" "$prefix/current.rollback.$$"
             mv -Tf "$prefix/current.rollback.$$" "$prefix/current"
@@ -641,6 +803,16 @@ EOF
         rollback_install
         echo 'API became inactive; the previous release was restored.' >&2
         exit 7
+    fi
+    if [ "$has_sing_box" = yes ]; then
+        if systemctl is-enabled --quiet "$sing_box_unit"; then sing_box_was_enabled=yes; fi
+        if systemctl is-active --quiet "$sing_box_unit"; then sing_box_was_active=yes; fi
+        if ! activate_sing_box; then
+            rollback_install
+            echo 'sing-box startup failed; the previous release was restored.' >&2
+            exit 7
+        fi
+        printf 'sing-box %s: active (%s)\n' "$sing_box_version" "$sing_box_unit"
     fi
     if [ "$has_agent" = no ] && [ "$agent_unit_exists_before" = yes ]; then
         if systemctl disable --now debian-router-agent.service; then
