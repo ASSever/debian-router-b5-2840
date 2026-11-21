@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +22,7 @@ const (
 	wanRouteTable     = "24224"
 	wanPolicyPriority = 24224
 	wanRouteMetric    = 10
+	wanLinkMetric     = 11
 )
 
 var ErrFirewallUnavailable = errors.New("firewall_unavailable")
@@ -290,7 +292,9 @@ func (m *StaticWANManager) syncPolicyRoute(ctx context.Context, desired firewall
 		}
 	}
 	if desired.Device == "" && hasWAN {
-		return m.lanNetAdmin(ctx, "/usr/sbin/ip", "-4", "route", "del", "default", "table", wanRouteTable, "metric", "10")
+		if err := m.lanNetAdmin(ctx, "/usr/sbin/ip", "-4", "route", "del", "default", "table", wanRouteTable, "metric", "10"); err != nil {
+			return err
+		}
 	}
 	if desired.Device != "" && !matching {
 		args := []string{"/usr/sbin/ip", "-4", "route", "replace", "default", "table", wanRouteTable, "metric", "10"}
@@ -299,7 +303,64 @@ func (m *StaticWANManager) syncPolicyRoute(ctx context.Context, desired firewall
 		} else {
 			args = append(args, "dev", desired.Device)
 		}
-		return m.lanNetAdmin(ctx, args...)
+		if err := m.lanNetAdmin(ctx, args...); err != nil {
+			return err
+		}
+	}
+	return m.syncPolicyWANLinks(ctx, desired.Device, routes)
+}
+
+func linkDestination(destination string) string {
+	if prefix, err := netip.ParsePrefix(destination); err == nil && prefix.Addr().Is4() && prefix.Bits() != 0 {
+		return prefix.Masked().String()
+	}
+	if address, err := netip.ParseAddr(destination); err == nil && address.Is4() {
+		return netip.PrefixFrom(address, 32).String()
+	}
+	return ""
+}
+
+func (m *StaticWANManager) syncPolicyWANLinks(ctx context.Context, device string, routes []firewallRoute) error {
+	wanted := map[string]bool{}
+	if device != "" {
+		links, err := m.ipRoutes(ctx, "table", "main", "dev", device, "scope", "link")
+		if err != nil {
+			return err
+		}
+		for _, link := range links {
+			if link.Type != "" && link.Type != "unicast" || slices.Contains(link.Flags, "linkdown") {
+				continue
+			}
+			if destination := linkDestination(link.Destination); destination != "" {
+				wanted[destination] = true
+			}
+		}
+	}
+	current := map[string]string{}
+	metric := strconv.Itoa(wanLinkMetric)
+	for _, route := range routes {
+		destination := linkDestination(route.Destination)
+		if route.Metric != wanLinkMetric || !isFirewallWAN(route.Device) || destination == "" {
+			continue
+		}
+		if !wanted[destination] {
+			if err := m.lanNetAdmin(ctx, "/usr/sbin/ip", "-4", "route", "del", destination,
+				"dev", route.Device, "table", wanRouteTable, "metric", metric); err != nil {
+				return err
+			}
+		} else {
+			current[destination] = route.Device
+		}
+	}
+	// Replies to clients on the WAN link must go to the client directly. The
+	// LAN policy lookup cannot fall back to main, where Wi-Fi may share a subnet.
+	for destination := range wanted {
+		if current[destination] != device {
+			if err := m.lanNetAdmin(ctx, "/usr/sbin/ip", "-4", "route", "replace", destination,
+				"dev", device, "scope", "link", "table", wanRouteTable, "metric", metric); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -495,7 +556,8 @@ func (m *StaticWANManager) firewallReady(ctx context.Context) bool {
 		}
 	}
 	for _, candidate := range routes {
-		if candidate.Device == route.Device && candidate.Gateway == route.Gateway && candidate.Metric == wanRouteMetric {
+		if candidate.Destination == "default" && candidate.Device == route.Device &&
+			candidate.Gateway == route.Gateway && candidate.Metric == wanRouteMetric {
 			exists, err := m.firewallTableExists(ctx)
 			return err == nil && exists
 		}
