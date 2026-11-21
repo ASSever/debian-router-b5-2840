@@ -6,6 +6,7 @@
 - Keep development work on Windows separate from operations on the Debian mini PC. The main agent owns changes on the mini PC and records applied settings, installed packages, verification results, and unresolved items in `MINIPC_SETUP_LOG.txt`. Keep credentials out of the repository, logs, and delegated context.
 
 - Deliver working increments to the existing GitHub repository `ASSever/debian-router-b5-2840`. Check the public diff, publish without rewriting remote history and verify the remote revision. Keep the two-command Debian entry point documented and tested. Use `docs/roadmap.md` to select the next small increment.
+- Use the repository's `roadmap-step` skill when choosing or resuming a roadmap increment.
 
 ## Finding code relationships
 
