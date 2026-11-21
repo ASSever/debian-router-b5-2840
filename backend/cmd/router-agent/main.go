@@ -43,9 +43,9 @@ func run(arguments []string) error {
 		}
 		return nil
 	}
-	if len(arguments) == 2 && arguments[0] == "rollback" {
+	if len(arguments) == 2 && arguments[0] == "rollback" || len(arguments) == 1 && arguments[0] == "disable-firewall" {
 		if os.Geteuid() != 0 {
-			return errors.New("WAN rollback requires root")
+			return errors.New("network recovery requires root")
 		}
 		manager, err := network.NewStaticWANManager()
 		if err != nil {
@@ -53,6 +53,9 @@ func run(arguments []string) error {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
+		if arguments[0] == "disable-firewall" {
+			return manager.DisableFirewall(ctx)
+		}
 		return manager.RollbackFromTimer(ctx, arguments[1])
 	}
 	if len(arguments) == 2 && arguments[0] == "rollback-pppoe" {
@@ -68,7 +71,7 @@ func run(arguments []string) error {
 		return manager.RollbackFromTimer(ctx, arguments[1])
 	}
 	if len(arguments) != 0 {
-		return errors.New("usage: router-agent [request OPERATION | rollback TRANSACTION_ID | rollback-pppoe TRANSACTION_ID]")
+		return errors.New("usage: router-agent [request OPERATION | rollback TRANSACTION_ID | rollback-pppoe TRANSACTION_ID | disable-firewall]")
 	}
 
 	allowedGIDText := os.Getenv("ROUTER_AGENT_ALLOWED_GID")
