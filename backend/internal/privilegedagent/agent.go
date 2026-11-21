@@ -18,13 +18,14 @@ import (
 
 const (
 	defaultSocketPath = "/run/debian-router-agent/agent.sock"
-	maxRequestBytes   = 1024
+	maxRequestBytes   = 16384
 	maxResponseBytes  = 16384
 	connectionTimeout = 20 * time.Second
 )
 
 // Request is the only message accepted by the privileged agent.
 type Request struct {
+	DNSConfig         *networkinventory.LANDNSConfig      `json:"dns_config,omitempty"`
 	ReservationChange *networkinventory.ReservationChange `json:"reservation_change,omitempty"`
 	LANConfig         *networkinventory.LANConfig         `json:"lan_config,omitempty"`
 	LANDestination    string                              `json:"lan_destination,omitempty"`
@@ -38,6 +39,7 @@ type Request struct {
 
 // Response contains harmless status data or a stable error code.
 type Response struct {
+	DNSStatus            *networkinventory.LANDNSStatus         `json:"dns_status,omitempty"`
 	Reservations         *networkinventory.DHCPReservations     `json:"reservations,omitempty"`
 	LANStatus            *networkinventory.LANStatus            `json:"lan_status,omitempty"`
 	LANConflict          *networkinventory.LANConflict          `json:"lan_conflict,omitempty"`
@@ -338,16 +340,18 @@ func handleConnectionWithAllOperations(
 		writeResponse(connection, Response{Error: "invalid_request"})
 		return
 	}
-	if request.ReservationChange != nil && request.Operation != "reservation-change" ||
+	if request.DNSConfig != nil && request.Operation != "lan-dns-save" ||
+		request.ReservationChange != nil && request.Operation != "reservation-change" ||
 		(request.LANConfig != nil && request.Operation != "lan-apply") ||
 		(request.LANDestination != "" && request.Operation != "lan-confirm") {
 		writeResponse(connection, Response{Error: "invalid_request"})
 		return
 	}
 	switch request.Operation {
-	case "lan-status", "lan-apply", "lan-confirm", "reservation-list", "reservation-change":
+	case "lan-status", "lan-apply", "lan-confirm", "reservation-list", "reservation-change", "lan-dns-status", "lan-dns-save", "lan-dns-clear":
 		if request.Interface != "" || request.StaticWANConfig != nil || request.PPPoEConfig != nil || request.WANLineConfig != nil ||
 			(request.Operation == "lan-apply") != (request.LANConfig != nil) ||
+			(request.Operation == "lan-dns-save") != (request.DNSConfig != nil) ||
 			(request.Operation == "reservation-change") != (request.ReservationChange != nil) ||
 			(request.Operation == "lan-confirm") != (request.TransactionID != "" && request.LANDestination != "") ||
 			(request.Operation != "lan-confirm" && request.TransactionID != "") {
@@ -572,6 +576,16 @@ func writeResponse(writer io.Writer, response Response) {
 
 func handleLANRequest(ctx context.Context, manager *networkinventory.StaticWANManager, request Request) Response {
 	switch request.Operation {
+	case "lan-dns-status":
+		result, err := manager.LANDNSStatus()
+		if err != nil {
+			return Response{Error: "lan_dns_unavailable"}
+		}
+		return Response{DNSStatus: &result}
+	case "lan-dns-save":
+		return dnsChangeResponse(manager.ApplyLANDNS(ctx, *request.DNSConfig))
+	case "lan-dns-clear":
+		return dnsChangeResponse(manager.ClearLANDNSCache(ctx))
 	case "reservation-list":
 		result, err := manager.ListDHCPReservations()
 		if err != nil {
@@ -607,6 +621,9 @@ func handleLANRequest(ctx context.Context, manager *networkinventory.StaticWANMa
 			if errors.As(err, &conflict) {
 				return Response{Error: "lan_overlap", LANConflict: conflict}
 			}
+			if errors.Is(err, networkinventory.ErrInvalidLANDNS) {
+				return Response{Error: "lan_dns_address_conflict"}
+			}
 			if errors.Is(err, networkinventory.ErrReservationConflict) {
 				return Response{Error: "lan_reservation_conflict"}
 			}
@@ -624,5 +641,19 @@ func handleLANRequest(ctx context.Context, manager *networkinventory.StaticWANMa
 		return Response{Status: "confirmed"}
 	default:
 		return Response{Error: "invalid_request"}
+	}
+}
+
+func dnsChangeResponse(err error) Response {
+	switch {
+	case err == nil:
+		return Response{Status: "saved"}
+	case errors.Is(err, networkinventory.ErrInvalidLANDNS):
+		return Response{Error: err.Error()}
+	case errors.Is(err, networkinventory.ErrStaticWANPending):
+		return Response{Error: "network_change_pending"}
+	default:
+		log.Printf("change LAN DNS: %v", err)
+		return Response{Error: "lan_dns_unavailable"}
 	}
 }

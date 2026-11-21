@@ -37,6 +37,7 @@ type StaticWANTransaction struct {
 }
 
 type staticWANRecord struct {
+	DNS       bool            `json:"dns_change,omitempty"`
 	Config    StaticWANConfig `json:"config"`
 	Line      *wanLineProfile `json:"line,omitempty"`
 	LAN       *LANConfig      `json:"lan,omitempty"`
@@ -44,6 +45,7 @@ type staticWANRecord struct {
 }
 
 type staticWANBackup struct {
+	DNS            bool            `json:"dns_change,omitempty"`
 	OriginalExists bool            `json:"original_exists"`
 	OriginalMode   uint32          `json:"original_mode"`
 	Line           *wanLineProfile `json:"line,omitempty"`
@@ -269,6 +271,7 @@ func (m *StaticWANManager) startTransaction(ctx context.Context, record staticWA
 		originalPermissions = uint32(originalMode.Mode().Perm())
 	}
 	backup := staticWANBackup{
+		DNS:            record.DNS,
 		OriginalExists: originalExists,
 		OriginalMode:   originalPermissions,
 		Line:           record.Line,
@@ -333,6 +336,9 @@ func (m *StaticWANManager) restoreOriginal(ctx context.Context, directory string
 	}
 	if backup.LAN != nil {
 		return m.restoreLAN(ctx, directory, backup)
+	}
+	if backup.DNS {
+		return m.restoreDNS(ctx, directory, backup)
 	}
 	if backup.OriginalExists {
 		original, exists, _, err := readStaticWANFile(filepath.Join(directory, "original"))

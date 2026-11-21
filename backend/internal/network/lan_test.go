@@ -57,7 +57,7 @@ func TestLANRenderChangesFirewallDestinationAndSource(t *testing.T) {
 	if err != nil || got == nil || *got != config {
 		t.Fatalf("network round trip = %+v, %v", got, err)
 	}
-	rules := string(renderLANFirewall(config))
+	rules := string(renderLANFirewall(config, true))
 	for _, want := range []string{"ip daddr 172.19.16.33", `iifname "enp2s0"`, "ip saddr 172.19.16.32/27", "counter drop"} {
 		if !strings.Contains(rules, want) {
 			t.Errorf("missing %q in %s", want, rules)

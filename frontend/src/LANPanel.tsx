@@ -27,6 +27,8 @@ class LANError extends Error {
         "Finish the current network change before applying LAN settings.",
       lan_reservation_conflict:
         "Edit or remove DHCP reservations that fall outside the new LAN or use its gateway address.",
+      lan_dns_address_conflict:
+        "The new LAN gateway matches a configured DNS upstream. Change the DNS upstream first.",
       lan_confirmation_requires_new_address:
         "Reconnect the LAN client and open the new address before confirming.",
       lan_confirmation_failed:
