@@ -11,6 +11,10 @@ description: Verify Debian Router B5-2840 changes before reporting them complete
 - Match checks to the changed behavior. Use the commands in `.github/workflows/api.yml` for Go and frontend, and `.github/workflows/bootstrap.yml` for shell and Debian bootstrap. For a skill or documentation change, verify its instructions, links and any scripts or examples that changed.
 - Check GitHub Actions for the revision being published. After merge or push, compare the expected commit with the remote revision. Report the relevant check results and any remaining verification.
 
+## When GitHub Actions fails
+
+Use `gh pr checks <pr>` to find the failing check and run ID. Use `gh run view <run-id> --log-failed` to find the first actionable error. If multiple runs have the same check name, match the revision and event before diagnosing. Reproduce with the matching workflow command and environment where practical. After a fix, verify the affected check on the updated revision. Keep raw logs local if they expose private details.
+
 ## When the increment includes a B5 rollout
 
 - For a release, match the tag and artifact to the intended revision and verify the checksum. Install through the two-command README entry point, pinning the selected version when latest is unsuitable. `--check` reports compatibility. For an installer change, also exercise the affected install, upgrade, or repeat-run path.
