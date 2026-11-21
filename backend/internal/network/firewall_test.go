@@ -63,7 +63,7 @@ func TestFirewallTracksOnlySelectedWANLinkRoutes(t *testing.T) {
 }
 
 func TestFirewallScopesNATAndWANInput(t *testing.T) {
-	rules := string(renderFirewall(defaultLAN, FirewallRules{}, firewallIngress{}))
+	rules := string(renderFirewall(defaultLAN, FirewallRules{}, firewallIngress{}, nil))
 	for _, want := range []string{
 		"destroy table inet debian_router_edge",
 		`iifname "enp2s0" oifname @wan_devices ip saddr 192.168.10.0/24 counter masquerade`,
@@ -109,10 +109,10 @@ func TestFirewallForwardVerdictsPrecedeGenericWANAcceptance(t *testing.T) {
 		Allow:    []string{"192.0.2.0/24"},
 		Block:    []string{"192.0.2.9/32"},
 	}
-	content := string(renderFirewall(defaultLAN, rules, firewallIngress{Device: "enp1s0", IPv4: []string{"192.168.1.104"}}))
+	content := string(renderFirewall(defaultLAN, rules, firewallIngress{Device: "enp1s0", IPv4: []string{"192.0.2.104"}}, nil))
 	offset := -1
 	for _, rule := range []string{
-		"elements = { 192.168.1.104 }",
+		"elements = { 192.0.2.104 }",
 		"ip saddr @forward_block counter name source_blocked drop",
 		"ip saddr != @forward_allow counter name source_not_allowed drop",
 		"ip saddr @forward_allow counter name source_allowed",
@@ -127,7 +127,7 @@ func TestFirewallForwardVerdictsPrecedeGenericWANAcceptance(t *testing.T) {
 		}
 		offset += position + 1
 	}
-	offline := string(renderFirewall(defaultLAN, rules, firewallIngress{}))
+	offline := string(renderFirewall(defaultLAN, rules, firewallIngress{}, nil))
 	if strings.Contains(offline, "dnat ip to") || !strings.Contains(offline, "ct status dnat counter drop") {
 		t.Fatal("WAN disappearance did not disable DNAT")
 	}

@@ -129,6 +129,8 @@ func newAPIWithNetworkOperations(
 	mux.HandleFunc("POST /api/network/firewall", a.firewallSettings)
 	mux.HandleFunc("GET /api/network/firewall/rules", a.firewallRuleSettings)
 	mux.HandleFunc("PUT /api/network/firewall/rules", a.firewallRuleSettings)
+	mux.HandleFunc("GET /api/network/routing", a.routingSettings)
+	mux.HandleFunc("PUT /api/network/routing", a.routingSettings)
 	mux.HandleFunc("POST /api/network/firewall/confirm", a.confirmStaticWANSettings)
 	mux.HandleFunc("POST /api/network/firewall/rollback", a.rollbackStaticWANSettings)
 	mux.HandleFunc("PUT /api/network/lan/dns", a.changeLANDNS)

@@ -80,7 +80,7 @@ func selectWANRoute(routes []firewallRoute) firewallRoute {
 	return selected
 }
 
-func renderFirewall(lan LANConfig, rules FirewallRules, ingress firewallIngress) []byte {
+func renderFirewall(lan LANConfig, rules FirewallRules, ingress firewallIngress, ipv6 *RoutedIPv6) []byte {
 	subnet := netip.MustParsePrefix(lan.Address).Masked()
 	var out strings.Builder
 	fmt.Fprintf(&out, `destroy table inet %[1]s
@@ -95,6 +95,11 @@ table inet %[1]s {
 	out.WriteString(`
  chain input {
   type filter hook input priority filter; policy accept;
+`)
+	if ipv6 != nil {
+		fmt.Fprintf(&out, "  ip6 daddr %s iifname != { %q, \"lo\" } counter drop\n", ipv6.LANPrefix, LANInterface)
+	}
+	out.WriteString(`
   iifname @wan_devices tcp dport { 22, 80, 443, 8080, 8081, 8443 } counter drop
   iifname @wan_devices ct state established,related accept
   iifname @wan_devices ip protocol udp udp sport 67 udp dport 68 accept
@@ -106,6 +111,7 @@ table inet %[1]s {
   type filter hook forward priority filter; policy accept;
 `)
 	renderForwardAllows(&out, rules, ingress)
+	renderIPv6Forward(&out, ipv6)
 	fmt.Fprintf(&out, `  iifname @wan_devices oifname "%[1]s" ct status dnat counter drop
   iifname "%[1]s" oifname @wan_devices ip saddr %[2]s ct state new,established,related counter accept
   iifname @wan_devices oifname "%[1]s" ip daddr %[2]s ct state established,related counter accept
@@ -250,7 +256,11 @@ func (m *StaticWANManager) firewallContent(ctx context.Context, lan LANConfig) (
 			return nil, err
 		}
 	}
-	return renderFirewall(lan, rules, ingress), nil
+	routing, err := m.routingConfig(lan)
+	if err != nil {
+		return nil, err
+	}
+	return renderFirewall(lan, rules, ingress, routing.IPv6), nil
 }
 
 func (m *StaticWANManager) appliedFirewallPath() string {
@@ -436,7 +446,21 @@ func (m *StaticWANManager) syncFirewallRoute(ctx context.Context, state *firewal
 			return err
 		}
 	}
-	return m.enableForwarding(ctx, state, LANInterface, route.Device)
+	if err := m.enableForwarding(ctx, state, LANInterface, route.Device); err != nil {
+		return err
+	}
+	lan, err := ManagedLAN(m.lanPath())
+	if err != nil {
+		return err
+	}
+	if lan == nil {
+		return ErrFirewallUnavailable
+	}
+	config, err := m.routingConfig(*lan)
+	if err != nil {
+		return err
+	}
+	return m.syncRouting(ctx, config, route.Device)
 }
 
 func (m *StaticWANManager) ApplyFirewall(ctx context.Context) (StaticWANTransaction, error) {
@@ -581,6 +605,9 @@ func (m *StaticWANManager) DisableFirewall(ctx context.Context) error {
 func (m *StaticWANManager) restoreFirewall(ctx context.Context) error {
 	state, err := m.readFirewall()
 	if err != nil || state == nil {
+		return err
+	}
+	if err := m.syncIPv6(ctx, nil, nil); err != nil {
 		return err
 	}
 	boot, err := currentBoot()
