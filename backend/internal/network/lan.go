@@ -427,10 +427,12 @@ func (m *StaticWANManager) syncLAN(ctx context.Context, config *LANConfig, recon
 		return err
 	}
 	_, err = m.run(ctx, "/usr/bin/systemd-run", "--system", "--quiet", "--collect", "--unit="+lanDNSUnit,
-		"--property=Type=exec", "--property=StateDirectory=debian-router-lan", "--property=ProtectSystem=strict",
+		"--property=Type=forking", "--property=PIDFile=/run/debian-router-lan/dnsmasq.pid",
+		"--property=RuntimeDirectory=debian-router-lan", "--property=StateDirectory=debian-router-lan",
+		"--property=ProtectSystem=strict",
 		"--property=ProtectHome=yes", "--property=PrivateTmp=yes",
 		"--property=ExecStartPre=/usr/bin/install -d -o nobody -g nogroup -m 0700 /var/lib/debian-router-lan/leases",
-		"--", "/usr/sbin/dnsmasq", "--keep-in-foreground", "--conf-file="+dns)
+		"--", "/usr/sbin/dnsmasq", "--pid-file=/run/debian-router-lan/dnsmasq.pid", "--conf-file="+dns)
 	return err
 }
 
