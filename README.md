@@ -57,7 +57,7 @@ sudo systemd-run --pipe --quiet --collect -p DynamicUser=yes -p StateDirectory=d
 
 Панель **LAN DNS** управляет локальными записями, основным и резервным резолверами, кэшем и пересылаемым DNS-трафиком LAN. [Инструкция по DNS](docs/network-dns.md)
 
-Панель **Firewall and NAT** включает защиту WAN и выход LAN через IPv4 NAT с независимым откатом. [Инструкция по firewall](docs/network-firewall.md)
+Панель **Firewall and NAT** включает защиту WAN и выход LAN через IPv4 NAT. В ней можно настроить TCP/UDP-пробросы, списки адресов источников и посмотреть счётчики. Для изменений действует независимый откат. [Инструкция по firewall](docs/network-firewall.md)
 
 ## Привилегированный агент
 

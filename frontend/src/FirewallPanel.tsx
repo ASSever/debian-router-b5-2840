@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
+import FirewallRulesPanel, {
+  type FirewallTransaction,
+} from "./FirewallRulesPanel";
 
 const endpoint = "/api/network/firewall";
-type Transaction = { transaction_id: string; expires_at: string };
-type Status = { enabled: boolean; wan?: string; pending?: Transaction };
+type Status = { enabled: boolean; wan?: string; pending?: FirewallTransaction };
 
 async function request<T>(path = "", post = false, body?: object): Promise<T> {
   const response = await fetch(endpoint + path, {
@@ -78,19 +80,22 @@ export default function FirewallPanel() {
     };
   }, [pending]);
 
+  function showPending(value: FirewallTransaction) {
+    setSeconds(
+      Math.max(
+        0,
+        Math.ceil((Date.parse(value.expires_at) - Date.now()) / 1000),
+      ),
+    );
+    setStatus((previous) => ({ ...previous, enabled: true, pending: value }));
+  }
+
   async function update(action: "apply" | "confirm" | "rollback" | "refresh") {
     setBusy(true);
     setMessage("");
     try {
       if (action === "apply") {
-        const value = await request<Transaction>("", true);
-        setSeconds(
-          Math.max(
-            0,
-            Math.ceil((Date.parse(value.expires_at) - Date.now()) / 1000),
-          ),
-        );
-        setStatus({ ...status, enabled: true, pending: value });
+        showPending(await request<FirewallTransaction>("", true));
       } else {
         if (action !== "refresh" && pending) {
           await request("/" + action, true, {
@@ -117,8 +122,8 @@ export default function FirewallPanel() {
       {pending ? (
         <>
           <p>
-            Verify LAN internet access and management access over Wi-Fi before
-            confirming. Automatic rollback in {seconds}s.
+            Verify traffic and management access over Wi-Fi before confirming.
+            Automatic rollback in {seconds}s.
           </p>
           <div className="static-wan-actions">
             <button
@@ -167,6 +172,13 @@ export default function FirewallPanel() {
         <p role="status" className="static-wan-feedback">
           {message}
         </p>
+      )}
+      {status?.enabled && (
+        <FirewallRulesPanel
+          pending={pending?.transaction_id}
+          readOnly={busy || Boolean(pending)}
+          onPending={showPending}
+        />
       )}
     </section>
   );

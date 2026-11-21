@@ -238,6 +238,13 @@ func (m *StaticWANManager) ApplyLAN(ctx context.Context, config LANConfig) (Stat
 		if lanUsesDNSAddress(config, dnsConfig) {
 			return ErrInvalidLANDNS
 		}
+		rules, err := m.readFirewallRules()
+		if err != nil {
+			return err
+		}
+		if _, err := normalizeFirewallRules(config, rules); err != nil {
+			return err
+		}
 		data, exists, _, err := readStaticWANFile(m.lanPath())
 		if err != nil {
 			return err

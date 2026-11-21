@@ -25,6 +25,7 @@ const (
 
 // Request is the only message accepted by the privileged agent.
 type Request struct {
+	FirewallRules     *networkinventory.FirewallRules     `json:"firewall_rules,omitempty"`
 	DNSConfig         *networkinventory.LANDNSConfig      `json:"dns_config,omitempty"`
 	ReservationChange *networkinventory.ReservationChange `json:"reservation_change,omitempty"`
 	LANConfig         *networkinventory.LANConfig         `json:"lan_config,omitempty"`
@@ -39,6 +40,7 @@ type Request struct {
 
 // Response contains harmless status data or a stable error code.
 type Response struct {
+	RuleSettings         *networkinventory.FirewallRulesStatus  `json:"firewall_rules,omitempty"`
 	Firewall             *networkinventory.FirewallStatus       `json:"firewall,omitempty"`
 	DNSStatus            *networkinventory.LANDNSStatus         `json:"dns_status,omitempty"`
 	Reservations         *networkinventory.DHCPReservations     `json:"reservations,omitempty"`
@@ -343,6 +345,7 @@ func handleConnectionWithAllOperations(
 		return
 	}
 	if request.DNSConfig != nil && request.Operation != "lan-dns-save" ||
+		request.FirewallRules != nil && request.Operation != "firewall-rules-apply" ||
 		request.ReservationChange != nil && request.Operation != "reservation-change" ||
 		(request.LANConfig != nil && request.Operation != "lan-apply") ||
 		(request.LANDestination != "" && request.Operation != "lan-confirm") {
@@ -350,10 +353,12 @@ func handleConnectionWithAllOperations(
 		return
 	}
 	switch request.Operation {
-	case "lan-status", "lan-apply", "lan-confirm", "reservation-list", "reservation-change", "lan-dns-status", "lan-dns-save", "lan-dns-clear", "firewall-status", "firewall-apply":
+	case "lan-status", "lan-apply", "lan-confirm", "reservation-list", "reservation-change", "lan-dns-status", "lan-dns-save", "lan-dns-clear",
+		"firewall-status", "firewall-apply", "firewall-rules-status", "firewall-rules-apply":
 		if request.Interface != "" || request.StaticWANConfig != nil || request.PPPoEConfig != nil || request.WANLineConfig != nil ||
 			(request.Operation == "lan-apply") != (request.LANConfig != nil) ||
 			(request.Operation == "lan-dns-save") != (request.DNSConfig != nil) ||
+			(request.Operation == "firewall-rules-apply") != (request.FirewallRules != nil) ||
 			(request.Operation == "reservation-change") != (request.ReservationChange != nil) ||
 			(request.Operation == "lan-confirm") != (request.TransactionID != "" && request.LANDestination != "") ||
 			(request.Operation != "lan-confirm" && request.TransactionID != "") {
@@ -578,6 +583,25 @@ func writeResponse(writer io.Writer, response Response) {
 
 func handleLANRequest(ctx context.Context, manager *networkinventory.StaticWANManager, request Request) Response {
 	switch request.Operation {
+	case "firewall-rules-status":
+		result, err := manager.FirewallRulesStatus(ctx)
+		if err != nil {
+			return Response{Error: "firewall_unavailable"}
+		}
+		return Response{RuleSettings: &result}
+	case "firewall-rules-apply":
+		result, err := manager.ApplyFirewallRules(ctx, *request.FirewallRules)
+		switch {
+		case err == nil:
+			return Response{StaticWANTransaction: &result}
+		case errors.Is(err, networkinventory.ErrStaticWANPending):
+			return Response{Error: "network_change_pending"}
+		case errors.Is(err, networkinventory.ErrInvalidFirewallRules):
+			return Response{Error: "invalid_firewall_rules"}
+		default:
+			log.Printf("apply firewall rules: %v", err)
+			return Response{Error: "firewall_unavailable"}
+		}
 	case "firewall-status":
 		result, err := manager.FirewallStatus(ctx)
 		if err != nil {
@@ -641,6 +665,9 @@ func handleLANRequest(ctx context.Context, manager *networkinventory.StaticWANMa
 			}
 			if errors.Is(err, networkinventory.ErrInvalidLANDNS) {
 				return Response{Error: "lan_dns_address_conflict"}
+			}
+			if errors.Is(err, networkinventory.ErrInvalidFirewallRules) {
+				return Response{Error: "lan_firewall_target_conflict"}
 			}
 			if errors.Is(err, networkinventory.ErrReservationConflict) {
 				return Response{Error: "lan_reservation_conflict"}
