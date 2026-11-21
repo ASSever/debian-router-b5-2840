@@ -35,9 +35,10 @@ type Row struct {
 
 // Report describes parse results. Import does not attempt a connection to any server.
 type Report struct {
-	Imported int   `json:"imported"`
-	Rejected int   `json:"rejected"`
-	Rows     []Row `json:"rows"`
+	ID       string `json:"id,omitempty"`
+	Imported int    `json:"imported"`
+	Rejected int    `json:"rejected"`
+	Rows     []Row  `json:"rows"`
 }
 
 // Server holds private settings for later connection checks. It must never be logged or sent to the browser.

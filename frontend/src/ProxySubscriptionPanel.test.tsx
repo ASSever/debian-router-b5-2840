@@ -8,11 +8,15 @@ afterEach(() => {
 });
 
 it("renders a mixed report and clears the private subscription input", async () => {
-  const fetchAPI = vi.fn<typeof fetch>(async (_, init) => {
+  const fetchAPI = vi.fn<typeof fetch>(async (path, init) => {
     if (init?.method !== "POST") {
       return Response.json({ imported: 0, rejected: 0, rows: [] });
     }
+    if (path === "/api/proxy/subscription/check") {
+      return Response.json({ status: "passed", elapsed_ms: 240 });
+    }
     return Response.json({
+      id: "saved-id",
       imported: 1,
       rejected: 1,
       rows: [
@@ -39,8 +43,22 @@ it("renders a mixed report and clears the private subscription input", async () 
   fireEvent.click(screen.getByRole("button", { name: "Import subscription" }));
   expect(await screen.findByText("1 imported · 1 rejected")).toBeVisible();
   expect(screen.getByText(/Unsupported protocol/)).toBeVisible();
-  expect(
-    screen.getByText(/Connectivity unchecked.*Provider-specific/),
-  ).toBeVisible();
+  expect(screen.getByText("Connectivity unchecked.")).toBeVisible();
+  expect(screen.getByText(/Provider-specific/)).toBeVisible();
   expect(input).toHaveValue("");
+  expect(
+    screen.queryByRole("button", { name: "Check server on line 2" }),
+  ).toBeNull();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Check server on line 1" }),
+  );
+  expect(
+    await screen.findByText("HTTPS check passed in 240 ms."),
+  ).toBeVisible();
+  expect(fetchAPI).toHaveBeenCalledWith(
+    "/api/proxy/subscription/check",
+    expect.objectContaining({
+      body: JSON.stringify({ line: 1, subscription_id: "saved-id" }),
+    }),
+  );
 });
