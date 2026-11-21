@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import StaticWANPanel from "./StaticWANPanel";
 import PPPoEPanel from "./PPPoEPanel";
+import WANDiagnosticPanel from "./WANDiagnosticPanel";
 
 const CHECK_INTERVAL_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 4_000;
@@ -587,6 +588,7 @@ function NetworkPortWizard() {
                   or change network settings.
                 </p>
               </section>
+              <WANDiagnosticPanel />
             </>
           )}
         </>

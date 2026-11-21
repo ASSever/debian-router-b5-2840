@@ -120,6 +120,7 @@ func newAPIWithNetworkOperations(
 	mux.HandleFunc("POST /api/network/wan/static/confirm", a.confirmStaticWANSettings)
 	mux.HandleFunc("POST /api/network/wan/static/rollback", a.rollbackStaticWANSettings)
 	mux.HandleFunc("GET /api/network/wan/line", a.wanLineStatus)
+	mux.HandleFunc("POST /api/network/wan/diagnostic", a.wanDiagnostic)
 	mux.HandleFunc("POST /api/network/wan/line", a.applyWANLineSettings)
 	mux.HandleFunc("POST /api/network/wan/line/confirm", a.confirmStaticWANSettings)
 	mux.HandleFunc("POST /api/network/wan/line/rollback", a.rollbackStaticWANSettings)
