@@ -31,6 +31,37 @@ func TestFirewallChecksRuleSelectorAndTable(t *testing.T) {
 	}
 }
 
+func TestFirewallTracksOnlySelectedWANLinkRoutes(t *testing.T) {
+	var mutations []string
+	manager := &StaticWANManager{run: func(_ context.Context, path string, arguments ...string) (string, error) {
+		if path == "/usr/sbin/ip" {
+			if got := strings.Join(arguments, " "); got != "-4 -json route show table main dev enp1s0 scope link" {
+				t.Fatalf("unexpected link route query: %s", got)
+			}
+			return `[{"dst":"198.51.100.0/24"},{"dst":"192.0.2.50"},{"dst":"203.0.113.0/24","flags":["linkdown"]}]`, nil
+		}
+		for index, arg := range arguments {
+			if arg == "--" {
+				mutations = append(mutations, strings.Join(arguments[index+1:], " "))
+				break
+			}
+		}
+		return "", nil
+	}}
+	previous := []firewallRoute{
+		{Device: "enp1s0", Metric: wanLinkMetric, Destination: "192.0.2.50"},
+		{Device: "ppp0", Metric: wanLinkMetric, Destination: "203.0.113.98"},
+	}
+	if err := manager.syncPolicyWANLinks(context.Background(), "enp1s0", previous); err != nil {
+		t.Fatal(err)
+	}
+	want := "/usr/sbin/ip -4 route del 203.0.113.98/32 dev ppp0 table 24224 metric 11\n" +
+		"/usr/sbin/ip -4 route replace 198.51.100.0/24 dev enp1s0 scope link table 24224 metric 11"
+	if got := strings.Join(mutations, "\n"); got != want {
+		t.Errorf("WAN link route changes:\n%s", got)
+	}
+}
+
 func TestFirewallScopesNATAndWANInput(t *testing.T) {
 	rules := string(renderFirewall(defaultLAN, FirewallRules{}, firewallIngress{}))
 	for _, want := range []string{
