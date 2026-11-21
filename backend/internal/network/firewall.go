@@ -1,6 +1,7 @@
 package network
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -77,14 +78,19 @@ func selectWANRoute(routes []firewallRoute) firewallRoute {
 	return selected
 }
 
-func renderFirewall(lan LANConfig) []byte {
+func renderFirewall(lan LANConfig, rules FirewallRules, ingress firewallIngress) []byte {
 	subnet := netip.MustParsePrefix(lan.Address).Masked()
-	return fmt.Appendf(nil, `destroy table inet %[1]s
+	var out strings.Builder
+	fmt.Fprintf(&out, `destroy table inet %[1]s
 table inet %[1]s {
  set wan_devices {
   type ifname
   elements = { "%[2]s", "%[3]s", "ppp0" }
  }
+`, firewallTable, StaticWANInterface, wanVLANName)
+	renderForwardCounters(&out, rules)
+	renderForwardNAT(&out, rules, ingress)
+	out.WriteString(`
  chain input {
   type filter hook input priority filter; policy accept;
   iifname @wan_devices tcp dport { 22, 80, 443, 8080, 8081, 8443 } counter drop
@@ -96,19 +102,23 @@ table inet %[1]s {
  }
  chain forward {
   type filter hook forward priority filter; policy accept;
-  iifname "%[4]s" oifname @wan_devices ip saddr %[5]s ct state new,established,related counter accept
-  iifname @wan_devices oifname "%[4]s" ip daddr %[5]s ct state established,related counter accept
-  iifname "%[4]s" counter drop
-  oifname "%[4]s" counter drop
+`)
+	renderForwardAllows(&out, rules, ingress)
+	fmt.Fprintf(&out, `  iifname @wan_devices oifname "%[1]s" ct status dnat counter drop
+  iifname "%[1]s" oifname @wan_devices ip saddr %[2]s ct state new,established,related counter accept
+  iifname @wan_devices oifname "%[1]s" ip daddr %[2]s ct state established,related counter accept
+  iifname "%[1]s" counter drop
+  oifname "%[1]s" counter drop
   iifname @wan_devices counter drop
   oifname @wan_devices counter drop
  }
  chain postrouting {
   type nat hook postrouting priority srcnat; policy accept;
-  iifname "%[4]s" oifname @wan_devices ip saddr %[5]s counter masquerade
+  iifname "%[1]s" oifname @wan_devices ip saddr %[2]s counter masquerade
  }
 }
-`, firewallTable, StaticWANInterface, wanVLANName, LANInterface, subnet)
+`, LANInterface, subnet)
+	return []byte(out.String())
 }
 
 func (m *StaticWANManager) firewallPath() string {
@@ -215,14 +225,49 @@ func (m *StaticWANManager) firewallTableExists(ctx context.Context) (bool, error
 }
 
 func (m *StaticWANManager) installFirewallRules(ctx context.Context, lan LANConfig) error {
-	path := filepath.Join(filepath.Dir(m.statePath), "firewall.nft")
-	if err := writeAtomicFile(path, renderFirewall(lan), 0600); err != nil {
+	content, err := m.firewallContent(ctx, lan)
+	if err != nil {
 		return err
 	}
+	return m.applyFirewallContent(ctx, content)
+}
+
+func (m *StaticWANManager) firewallContent(ctx context.Context, lan LANConfig) ([]byte, error) {
+	rules, err := m.readFirewallRules()
+	if err != nil {
+		return nil, err
+	}
+	rules, err = normalizeFirewallRules(lan, rules)
+	if err != nil {
+		return nil, err
+	}
+	var ingress firewallIngress
+	if len(rules.Forwards) != 0 {
+		ingress, err = m.forwardIngress(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return renderFirewall(lan, rules, ingress), nil
+}
+
+func (m *StaticWANManager) appliedFirewallPath() string {
+	return filepath.Join(filepath.Dir(m.statePath), "firewall.nft")
+}
+
+func (m *StaticWANManager) applyFirewallContent(ctx context.Context, content []byte) error {
+	path := m.appliedFirewallPath() + ".next"
+	if err := writeAtomicFile(path, content, 0600); err != nil {
+		return err
+	}
+	defer os.Remove(path)
 	if err := m.lanNetAdmin(ctx, "/usr/sbin/nft", "-c", "-f", path); err != nil {
 		return err
 	}
-	return m.lanNetAdmin(ctx, "/usr/sbin/nft", "-f", path)
+	if err := m.lanNetAdmin(ctx, "/usr/sbin/nft", "-f", path); err != nil {
+		return err
+	}
+	return os.Rename(path, m.appliedFirewallPath())
 }
 
 func (m *StaticWANManager) syncPolicyRoute(ctx context.Context, desired firewallRoute) error {
@@ -543,15 +588,23 @@ func (m *StaticWANManager) MaintainFirewall(ctx context.Context) {
 			if err != nil {
 				return err
 			}
-			if !exists {
-				lan, err := ManagedLAN(m.lanPath())
-				if err != nil {
-					return err
-				}
-				if lan == nil {
-					return ErrFirewallUnavailable
-				}
-				if err := m.installFirewallRules(task, *lan); err != nil {
+			lan, err := ManagedLAN(m.lanPath())
+			if err != nil {
+				return err
+			}
+			if lan == nil {
+				return ErrFirewallUnavailable
+			}
+			content, err := m.firewallContent(task, *lan)
+			if err != nil {
+				return err
+			}
+			applied, _, _, err := readStaticWANFile(m.appliedFirewallPath())
+			if err != nil {
+				return err
+			}
+			if !exists || !bytes.Equal(content, applied) {
+				if err := m.applyFirewallContent(task, content); err != nil {
 					return err
 				}
 			}
