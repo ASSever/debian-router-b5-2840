@@ -67,6 +67,9 @@ if [ "$mode" != --check ]; then
         if [ -n "${release_tmp-}" ] && [ -d "$release_tmp" ]; then
             rm -r -- "$release_tmp"
         fi
+        if [ -n "${zapret_tmp-}" ] && [ -d "$zapret_tmp" ]; then
+            rm -r -- "$zapret_tmp"
+        fi
     }
     trap cleanup EXIT
     trap 'exit 1' HUP INT TERM
@@ -117,13 +120,17 @@ if [ "$mode" != --check ]; then
     lan_listing=$(printf '%s\n%s\n' "$pppoe_listing" "$package/LAN_SUPPORT" | sort)
     sing_box_listing=$(printf '%s\n%s\n' "$lan_listing" "$package/SING_BOX_SUPPORT" | sort)
     proxy_routing_listing=$(printf '%s\n%s\n' "$sing_box_listing" "$package/PROXY_ROUTING_SUPPORT" | sort)
+    zapret_listing=$(printf '%s\n' "$proxy_routing_listing" "$package/zapret-alt11.sh" \
+        "$package/zapret-nft.sh" "$package/debian-router-zapret.service" | sort)
     actual_listing=$(tar -tzf "$stage/$archive" | sort)
     has_agent=no
     has_pppoe=no
     has_lan=no
     has_sing_box=no
     has_proxy_routing=no
+    has_zapret=no
     case "$actual_listing" in
+        "$zapret_listing") has_agent=yes; has_ui=yes; has_pppoe=yes; has_lan=yes; has_sing_box=yes; has_proxy_routing=yes; has_zapret=yes ;;
         "$proxy_routing_listing") has_agent=yes; has_ui=yes; has_pppoe=yes; has_lan=yes; has_sing_box=yes; has_proxy_routing=yes ;;
         "$sing_box_listing") has_agent=yes; has_ui=yes; has_pppoe=yes; has_lan=yes; has_sing_box=yes ;;
         "$lan_listing") has_agent=yes; has_ui=yes; has_pppoe=yes; has_lan=yes ;;
@@ -198,6 +205,15 @@ if [ "$mode" != --check ]; then
             echo 'Invalid proxy routing support marker.' >&2
             exit 5
         fi
+    fi
+    zapret_files='zapret-alt11.sh zapret-nft.sh debian-router-zapret.service'
+    if [ "$has_zapret" = yes ]; then
+        for payload in $zapret_files; do
+            if [ ! -f "$stage/$package/$payload" ] || [ -L "$stage/$package/$payload" ]; then
+                echo 'Invalid Zapret payload.' >&2
+                exit 5
+            fi
+        done
     fi
 
     prefix=/opt/debian-router-b5-2840
@@ -276,6 +292,14 @@ if [ "$mode" != --check ]; then
             echo 'Installed proxy routing marker differs from verified release.' >&2
             exit 6
         fi
+        if [ "$has_zapret" = yes ]; then
+            for payload in $zapret_files; do
+                if [ -L "$release_dir/$payload" ] || ! cmp -s "$stage/$package/$payload" "$release_dir/$payload"; then
+                    echo 'Installed Zapret files differ from the verified release.' >&2
+                    exit 6
+                fi
+            done
+        fi
     else
         release_tmp=$prefix/releases/.new-$package_version-$$
         install -d -m 0755 "$release_tmp"
@@ -295,6 +319,10 @@ if [ "$mode" != --check ]; then
         fi
         if [ "$has_proxy_routing" = yes ]; then
             install -m 0644 "$proxy_marker" "$release_tmp/PROXY_ROUTING_SUPPORT"
+        fi
+        if [ "$has_zapret" = yes ]; then
+            install -m 0755 "$stage/$package/zapret-alt11.sh" "$stage/$package/zapret-nft.sh" "$release_tmp/"
+            install -m 0644 "$stage/$package/debian-router-zapret.service" "$release_tmp/"
         fi
         if [ "$has_ui" = yes ]; then
             install -d -m 0755 "$release_tmp/web" "$release_tmp/web/assets"
@@ -546,6 +574,66 @@ EOF
         exit 7
     fi
 
+    zapret_unit=debian-router-zapret.service
+    zapret_service=/etc/systemd/system/$zapret_unit
+    zapret_unit_changed=no
+    zapret_was_active=no
+
+    prepare_zapret() {
+        zapret_assets=$release_dir/zapret-assets
+        if [ ! -x "$zapret_assets/bin/nfqws" ]; then
+            zapret_version=v72.13
+            flowseal_revision=cf018db758623ed1813b9d93a6d7f3bdf01cc2b4
+            base=zapret-$zapret_version
+            flowseal=zapret-discord-youtube-$flowseal_revision
+            /usr/lib/apt/apt-helper download-file \
+                "https://github.com/bol-van/zapret/releases/download/$zapret_version/$base.tar.gz" \
+                "$stage/nfqws.tar.gz" SHA256:25c74e6c5f48963fa244c2955e76694a07c39447245a0457e2efdc74b3317e68 || return 1
+            /usr/lib/apt/apt-helper download-file \
+                "https://codeload.github.com/Flowseal/zapret-discord-youtube/tar.gz/$flowseal_revision" \
+                "$stage/alt11.tar.gz" SHA256:bbf6b3fbaa4bfd392db48631230a236bc70912b9836ca94024ce7fa2725eddc2 || return 1
+            zapret_tmp=$(mktemp -d "$release_dir/.zapret.XXXXXXXX") || return 1
+            chmod 0755 "$zapret_tmp" || return 1
+            mkdir -p "$zapret_tmp/bin" "$zapret_tmp/lists" || return 1
+            tar -xOzf "$stage/nfqws.tar.gz" "$base/binaries/linux-x86_64/nfqws" > "$zapret_tmp/bin/nfqws" || return 1
+            chmod 0755 "$zapret_tmp/bin/nfqws" || return 1
+            for payload in ACTIVE_DISCORD_UDP.bin quic_initial_www_google_com.bin \
+                tls_clienthello_www_google_com.bin tls_clienthello_www_sferum_ru.bin stun2.bin; do
+                tar -xOzf "$stage/alt11.tar.gz" "$flowseal/bin/$payload" > "$zapret_tmp/bin/$payload" || return 1
+            done
+            for payload in list-general.txt list-google.txt list-exclude.txt ipset-all.txt ipset-exclude.txt; do
+                tar -xOzf "$stage/alt11.tar.gz" "$flowseal/lists/$payload" > "$zapret_tmp/lists/$payload" || return 1
+            done
+            "$release_dir/zapret-alt11.sh" "$zapret_tmp" --dry-run >"$stage/zapret-check.log" 2>&1 || return 1
+            mv -T "$zapret_tmp" "$zapret_assets" || return 1
+            zapret_tmp=
+        else
+            "$release_dir/zapret-alt11.sh" "$zapret_assets" --dry-run >"$stage/zapret-check.log" 2>&1 || return 1
+        fi
+        sed -e "s|@RELEASE@|$release_dir|g" -e "s|@ASSETS@|$zapret_assets|g" \
+            "$release_dir/$zapret_unit" > "$stage/$zapret_unit" || return 1
+        systemd-analyze verify "$stage/$zapret_unit" || return 1
+    }
+
+    activate_zapret() {
+        if cmp -s "$stage/$zapret_unit" "$zapret_service"; then return 0; fi
+        if [ -f "$zapret_service" ]; then
+            cp -p "$zapret_service" "$stage/previous-zapret.service" || return 1
+        fi
+        if systemctl is-active --quiet "$zapret_unit"; then zapret_was_active=yes; fi
+        install -m 0644 "$stage/$zapret_unit" "$zapret_service.new.$$" || return 1
+        mv -Tf "$zapret_service.new.$$" "$zapret_service" || return 1
+        zapret_unit_changed=yes
+        systemctl daemon-reload || return 1
+        if [ "$zapret_was_active" = yes ]; then systemctl restart "$zapret_unit" || return 1; fi
+    }
+
+    if [ "$has_zapret" = yes ] && ! prepare_zapret; then
+        if [ -s "$stage/zapret-check.log" ]; then cat "$stage/zapret-check.log" >&2; fi
+        echo 'Could not prepare Zapret ALT11; the active release was not changed.' >&2
+        exit 7
+    fi
+
     unit_tmp=$stage/debian-router-api.service
     if [ "$has_agent" = yes ]; then
         cat > "$unit_tmp" <<'EOF'
@@ -691,6 +779,16 @@ EOF
     fi
 
     rollback_install() {
+        if [ "$zapret_unit_changed" = yes ]; then
+            if [ -f "$stage/previous-zapret.service" ]; then
+                cp -p "$stage/previous-zapret.service" "$zapret_service.new.$$"
+                mv -Tf "$zapret_service.new.$$" "$zapret_service"
+            else
+                rm -f -- "$zapret_service"
+            fi
+            systemctl daemon-reload || :
+            if [ "$zapret_was_active" = yes ]; then systemctl restart "$zapret_unit" || :; fi
+        fi
         if [ "$sing_box_activation_attempted" = yes ]; then
             if [ "$sing_box_was_enabled" = no ]; then
                 systemctl disable "$sing_box_unit" || :
@@ -854,6 +952,14 @@ EOF
             rm -f -- "$agent_service" "$agent_current"
             systemctl daemon-reload
         fi
+    fi
+    if [ "$has_zapret" = yes ]; then
+        if ! activate_zapret; then
+            rollback_install
+            echo 'Could not install the Zapret unit; the previous release was restored.' >&2
+            exit 7
+        fi
+        printf 'Zapret profile: ALT11 (%s)\n' "$zapret_unit"
     fi
     printf 'Installed API release: %s\n' "$package_version"
     if [ "$has_agent" = yes ]; then

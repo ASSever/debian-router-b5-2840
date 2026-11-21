@@ -1,0 +1,30 @@
+[Unit]
+Description=Debian Router Zapret (ALT11)
+After=network.target nftables.service
+
+[Service]
+Type=exec
+Environment=ZAPRET_LAN_IF=enp2s0
+Environment=ZAPRET_WAN_IF=enp1s0
+ExecStartPre=@RELEASE@/zapret-alt11.sh @ASSETS@ --dry-run
+ExecStart=@RELEASE@/zapret-alt11.sh @ASSETS@
+ExecStartPost=@RELEASE@/zapret-nft.sh start ${ZAPRET_LAN_IF} ${ZAPRET_WAN_IF}
+ExecStopPost=@RELEASE@/zapret-nft.sh stop
+Restart=on-failure
+RestartSec=2s
+TimeoutStartSec=10s
+TimeoutStopSec=5s
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6 AF_PACKET
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
