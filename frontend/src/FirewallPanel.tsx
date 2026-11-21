@@ -175,7 +175,7 @@ export default function FirewallPanel() {
       )}
       {status?.enabled && (
         <FirewallRulesPanel
-          pending={pending?.transaction_id}
+          key={pending?.transaction_id ?? "confirmed"}
           readOnly={busy || Boolean(pending)}
           onPending={showPending}
         />

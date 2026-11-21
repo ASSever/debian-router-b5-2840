@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
 
 const endpoint = "/api/network/firewall/rules";
 const maxEntries = 32;
@@ -61,11 +61,9 @@ function Counter({
 }
 
 export default function FirewallRulesPanel({
-  pending,
   readOnly,
   onPending,
 }: {
-  pending?: string;
   readOnly: boolean;
   onPending(value: FirewallTransaction): void;
 }) {
@@ -73,6 +71,7 @@ export default function FirewallRulesPanel({
   const [counters, setCounters] = useState<Counters | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const sourceListId = useId();
 
   useEffect(() => {
     let active = true;
@@ -96,7 +95,7 @@ export default function FirewallRulesPanel({
     return () => {
       active = false;
     };
-  }, [pending]);
+  }, []);
 
   function editForward(id: number, fields: Partial<Forward>) {
     if (draft)
@@ -155,6 +154,7 @@ export default function FirewallRulesPanel({
   return (
     <section aria-label="Port forwarding and source lists">
       <h4>Port forwarding</h4>
+      {!draft && !message && <p role="status">Loading firewall rules…</p>}
       {draft && (
         <form onSubmit={(event) => void apply(event)}>
           {draft.forwards.map((forward, index) => (
@@ -271,9 +271,10 @@ export default function FirewallRulesPanel({
             the block list.
           </p>
           <div className="static-wan-fields">
-            <label className="static-wan-field">
-              Allow
+            <div className="static-wan-field">
+              <label htmlFor={sourceListId + "-allow"}>Allow</label>
               <textarea
+                id={sourceListId + "-allow"}
                 rows={3}
                 disabled={operationDisabled}
                 value={draft.allow}
@@ -281,10 +282,11 @@ export default function FirewallRulesPanel({
                   setDraft({ ...draft, allow: event.target.value })
                 }
               />
-            </label>
-            <label className="static-wan-field">
-              Block
+            </div>
+            <div className="static-wan-field">
+              <label htmlFor={sourceListId + "-block"}>Block</label>
               <textarea
+                id={sourceListId + "-block"}
                 rows={3}
                 disabled={operationDisabled}
                 value={draft.block}
@@ -292,7 +294,7 @@ export default function FirewallRulesPanel({
                   setDraft({ ...draft, block: event.target.value })
                 }
               />
-            </label>
+            </div>
           </div>
           <ul>
             <li>
