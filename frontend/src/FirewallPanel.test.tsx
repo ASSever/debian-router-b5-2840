@@ -37,6 +37,12 @@ it("discards provisional inputs before the restored rules finish loading", async
     if (path === endpoint + "/rules") {
       return rolledBack ? restored : rules(["192.0.2.0/24"]);
     }
+    if (path === "/api/network/routing") {
+      return Response.json({
+        config: { routes: [], ipv6: null },
+        ipv6_active: false,
+      });
+    }
     return Response.json({
       enabled: true,
       pending: rolledBack ? undefined : pending,

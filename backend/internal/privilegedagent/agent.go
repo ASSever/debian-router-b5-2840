@@ -25,6 +25,7 @@ const (
 
 // Request is the only message accepted by the privileged agent.
 type Request struct {
+	RoutingConfig     *networkinventory.RoutingConfig     `json:"routing_config,omitempty"`
 	FirewallRules     *networkinventory.FirewallRules     `json:"firewall_rules,omitempty"`
 	DNSConfig         *networkinventory.LANDNSConfig      `json:"dns_config,omitempty"`
 	ReservationChange *networkinventory.ReservationChange `json:"reservation_change,omitempty"`
@@ -40,6 +41,7 @@ type Request struct {
 
 // Response contains harmless status data or a stable error code.
 type Response struct {
+	RoutingStatus        *networkinventory.RoutingStatus        `json:"routing_status,omitempty"`
 	RuleSettings         *networkinventory.FirewallRulesStatus  `json:"firewall_rules,omitempty"`
 	Firewall             *networkinventory.FirewallStatus       `json:"firewall,omitempty"`
 	DNSStatus            *networkinventory.LANDNSStatus         `json:"dns_status,omitempty"`
@@ -345,6 +347,7 @@ func handleConnectionWithAllOperations(
 		return
 	}
 	if request.DNSConfig != nil && request.Operation != "lan-dns-save" ||
+		request.RoutingConfig != nil && request.Operation != "routing-apply" ||
 		request.FirewallRules != nil && request.Operation != "firewall-rules-apply" ||
 		request.ReservationChange != nil && request.Operation != "reservation-change" ||
 		(request.LANConfig != nil && request.Operation != "lan-apply") ||
@@ -354,11 +357,12 @@ func handleConnectionWithAllOperations(
 	}
 	switch request.Operation {
 	case "lan-status", "lan-apply", "lan-confirm", "reservation-list", "reservation-change", "lan-dns-status", "lan-dns-save", "lan-dns-clear",
-		"firewall-status", "firewall-apply", "firewall-rules-status", "firewall-rules-apply":
+		"firewall-status", "firewall-apply", "firewall-rules-status", "firewall-rules-apply", "routing-status", "routing-apply":
 		if request.Interface != "" || request.StaticWANConfig != nil || request.PPPoEConfig != nil || request.WANLineConfig != nil ||
 			(request.Operation == "lan-apply") != (request.LANConfig != nil) ||
 			(request.Operation == "lan-dns-save") != (request.DNSConfig != nil) ||
 			(request.Operation == "firewall-rules-apply") != (request.FirewallRules != nil) ||
+			(request.Operation == "routing-apply") != (request.RoutingConfig != nil) ||
 			(request.Operation == "reservation-change") != (request.ReservationChange != nil) ||
 			(request.Operation == "lan-confirm") != (request.TransactionID != "" && request.LANDestination != "") ||
 			(request.Operation != "lan-confirm" && request.TransactionID != "") {
@@ -583,6 +587,29 @@ func writeResponse(writer io.Writer, response Response) {
 
 func handleLANRequest(ctx context.Context, manager *networkinventory.StaticWANManager, request Request) Response {
 	switch request.Operation {
+	case "routing-status":
+		result, err := manager.RoutingStatus(ctx)
+		if err != nil {
+			return Response{Error: "routing_unavailable"}
+		}
+		return Response{RoutingStatus: &result}
+	case "routing-apply":
+		result, err := manager.ApplyRouting(ctx, *request.RoutingConfig)
+		switch {
+		case err == nil:
+			return Response{StaticWANTransaction: &result}
+		case errors.Is(err, networkinventory.ErrStaticWANPending):
+			return Response{Error: "network_change_pending"}
+		case errors.Is(err, networkinventory.ErrInvalidRouting),
+			errors.Is(err, networkinventory.ErrRoutingOverlap),
+			errors.Is(err, networkinventory.ErrRoutingGateway),
+			errors.Is(err, networkinventory.ErrRoutingWAN),
+			errors.Is(err, networkinventory.ErrRoutingResources):
+			return Response{Error: err.Error()}
+		default:
+			log.Printf("apply routing: %v", err)
+			return Response{Error: "routing_unavailable"}
+		}
 	case "firewall-rules-status":
 		result, err := manager.FirewallRulesStatus(ctx)
 		if err != nil {
@@ -668,6 +695,9 @@ func handleLANRequest(ctx context.Context, manager *networkinventory.StaticWANMa
 			}
 			if errors.Is(err, networkinventory.ErrInvalidFirewallRules) {
 				return Response{Error: "lan_firewall_target_conflict"}
+			}
+			if errors.Is(err, networkinventory.ErrRoutingOverlap) {
+				return Response{Error: "lan_routing_conflict"}
 			}
 			if errors.Is(err, networkinventory.ErrReservationConflict) {
 				return Response{Error: "lan_reservation_conflict"}

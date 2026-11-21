@@ -53,7 +53,8 @@ func (a *api) applyLANSettings(w http.ResponseWriter, r *http.Request) {
 			*network.LANConflict
 		}{"lan_overlap", response.LANConflict})
 	case response.Error == "network_change_pending", response.Error == "lan_reservation_conflict",
-		response.Error == "lan_dns_address_conflict", response.Error == "lan_firewall_target_conflict":
+		response.Error == "lan_dns_address_conflict", response.Error == "lan_firewall_target_conflict",
+		response.Error == "lan_routing_conflict":
 		writeJSON(w, http.StatusConflict, map[string]string{"error": response.Error})
 	case err != nil || response.StaticWANTransaction == nil:
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "lan_apply_failed"})

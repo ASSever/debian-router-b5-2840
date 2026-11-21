@@ -31,6 +31,8 @@ class LANError extends Error {
         "The new LAN gateway matches a configured DNS upstream. Change the DNS upstream first.",
       lan_firewall_target_conflict:
         "Remove port forwards whose destinations would fall outside the new LAN or use its gateway address.",
+      lan_routing_conflict:
+        "Remove static routes whose destination overlaps the new LAN subnet.",
       lan_confirmation_requires_new_address:
         "Reconnect the LAN client and open the new address before confirming.",
       lan_confirmation_failed:

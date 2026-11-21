@@ -245,6 +245,9 @@ func (m *StaticWANManager) ApplyLAN(ctx context.Context, config LANConfig) (Stat
 		if _, err := normalizeFirewallRules(config, rules); err != nil {
 			return err
 		}
+		if _, err := m.routingConfig(config); err != nil {
+			return err
+		}
 		data, exists, _, err := readStaticWANFile(m.lanPath())
 		if err != nil {
 			return err

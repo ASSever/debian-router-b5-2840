@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import FirewallRulesPanel, {
   type FirewallTransaction,
 } from "./FirewallRulesPanel";
+import RoutingPanel from "./RoutingPanel";
 
 const endpoint = "/api/network/firewall";
 type Status = { enabled: boolean; wan?: string; pending?: FirewallTransaction };
@@ -174,11 +175,16 @@ export default function FirewallPanel() {
         </p>
       )}
       {status?.enabled && (
-        <FirewallRulesPanel
-          key={pending?.transaction_id ?? "confirmed"}
-          readOnly={busy || Boolean(pending)}
-          onPending={showPending}
-        />
+        <Fragment key={pending?.transaction_id ?? "confirmed"}>
+          <FirewallRulesPanel
+            readOnly={busy || Boolean(pending)}
+            onPending={showPending}
+          />
+          <RoutingPanel
+            readOnly={busy || Boolean(pending)}
+            onPending={showPending}
+          />
+        </Fragment>
       )}
     </section>
   );
