@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"net"
 	"net/netip"
 	"time"
 )
@@ -13,6 +14,31 @@ type WANDiagnostic struct {
 	Resolver  string     `json:"resolver,omitempty"`
 	Result    string     `json:"result"`
 	Checks    []WANCheck `json:"checks"`
+}
+
+type WANProbeState struct {
+	Interface string
+	Status    ActiveNetworkStatus
+}
+
+// ReadWANProbeState is called by the agent because networkd limits access to its
+// state. The probes themselves run in the unprivileged API service.
+func ReadWANProbeState(ctx context.Context) (WANProbeState, error) {
+	device := StaticWANInterface
+	status, err := ReadActiveNetworkStatusWith(ctx, device, runNetworkctl)
+	if err != nil {
+		return WANProbeState{}, err
+	}
+	if status.LinkState == "carrier" || status.LinkState == "degraded-carrier" {
+		if vlan, err := net.InterfaceByName(wanVLANName); err == nil && vlan.Flags&net.FlagUp != 0 {
+			device = vlan.Name
+			status, err = ReadActiveNetworkStatusWith(ctx, device, runNetworkctl)
+			if err != nil {
+				return WANProbeState{}, err
+			}
+		}
+	}
+	return WANProbeState{Interface: device, Status: status}, nil
 }
 
 type WANCheck struct {

@@ -7,6 +7,6 @@ import (
 	"errors"
 )
 
-func RunWANDiagnostic(context.Context) (WANDiagnostic, error) {
+func RunWANDiagnostic(context.Context, WANProbeState) (WANDiagnostic, error) {
 	return WANDiagnostic{}, errors.New("WAN diagnostics require Linux")
 }
