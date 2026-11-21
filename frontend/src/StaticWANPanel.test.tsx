@@ -50,6 +50,11 @@ describe("Static WAN controls", () => {
       if (input === "/api/network/dhcp?interface=enp1s0") {
         return Promise.resolve(dhcpResponse());
       }
+      if (input === "/api/proxy/subscription") {
+        return Promise.resolve(
+          response(200, { imported: 0, rejected: 0, rows: [] }),
+        );
+      }
       if (input === "/api/auth/login") {
         return Promise.resolve(response(200, { must_change_password: false }));
       }
@@ -114,6 +119,11 @@ describe("Static WAN controls", () => {
       }
       if (input === "/api/network/dhcp?interface=enp1s0") {
         return Promise.resolve(dhcpResponse());
+      }
+      if (input === "/api/proxy/subscription") {
+        return Promise.resolve(
+          response(200, { imported: 0, rejected: 0, rows: [] }),
+        );
       }
       if (input === "/api/network/wan/static") {
         return Promise.resolve(

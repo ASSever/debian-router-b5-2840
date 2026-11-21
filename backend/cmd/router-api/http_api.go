@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ASSever/debian-router-b5-2840/backend/internal/admin"
@@ -24,6 +25,7 @@ const sessionCookieName = "__Host-router_session"
 
 type api struct {
 	db                    *sql.DB
+	proxyImportLock       sync.Mutex
 	now                   func() time.Time
 	readNetworkInterfaces func() ([]networkinventory.Interface, error)
 	readNetworkDHCPStatus func(string) (networkinventory.DHCPStatus, error)
@@ -148,6 +150,8 @@ func newAPIWithNetworkOperations(
 	mux.HandleFunc("POST /api/network/wan/pppoe/confirm", a.confirmPPPoESettings)
 	mux.HandleFunc("POST /api/network/wan/pppoe/rollback", a.rollbackPPPoESettings)
 	mux.HandleFunc("POST /api/network/wan/pppoe/reconnect", a.reconnectPPPoESettings)
+	mux.HandleFunc("GET /api/proxy/subscription", a.readProxySubscription)
+	mux.HandleFunc("POST /api/proxy/subscription", a.importProxySubscription)
 	mux.HandleFunc("POST /api/auth/login", a.login)
 	mux.HandleFunc("GET /api/auth/session", a.sessionStatus)
 	mux.HandleFunc("DELETE /api/auth/session", a.logout)
@@ -293,9 +297,13 @@ func (a *api) authorizeNetworkMutation(w http.ResponseWriter, r *http.Request) b
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "origin_rejected"})
 		return false
 	}
+	return a.authorizeAdministrator(w, r)
+}
+
+func (a *api) authorizeAdministrator(w http.ResponseWriter, r *http.Request) bool {
 	_, ok, err := a.validSession(r)
 	if err != nil {
-		log.Printf("read administrator session for network mutation: %v", err)
+		log.Printf("read administrator session: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal_error"})
 		return false
 	}
@@ -305,7 +313,7 @@ func (a *api) authorizeNetworkMutation(w http.ResponseWriter, r *http.Request) b
 	}
 	mustChange, err := admin.MustChange(r.Context(), a.db)
 	if err != nil {
-		log.Printf("read administrator password state for network mutation: %v", err)
+		log.Printf("read administrator password state: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal_error"})
 		return false
 	}
@@ -517,7 +525,11 @@ func sameOrigin(r *http.Request) bool {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, target any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, 8192)
+	return decodeLimitedJSON(w, r, target, 8192)
+}
+
+func decodeLimitedJSON(w http.ResponseWriter, r *http.Request, target any, limit int64) error {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
