@@ -47,7 +47,7 @@ printf '%s\n' 'dnsmasq-base nftables' > "$stage/$package/LAN_SUPPORT"
 printf '%s\n' '1.14.4' '699a1b510aa4396b2176d32d1181920399ebf1e267835da6f3b598d0f7c24968' \
     > "$stage/$package/SING_BOX_SUPPORT"
 printf '%s\n' 'profile-v1' > "$stage/$package/PROXY_ROUTING_SUPPORT"
-install -m 0755 "$repo/system/zapret-alt11.sh" "$repo/system/zapret-nft.sh" "$stage/$package/"
+install -m 0755 "$repo/system/zapret-alt11.sh" "$repo/system/zapret-nft.sh" "$repo/system/zapret-config.sh" "$stage/$package/"
 install -m 0644 "$repo/system/debian-router-zapret.service" "$stage/$package/"
 mkdir -p "$stage/$package/web/assets"
 install -m 0644 "$ui_dist/index.html" "$stage/$package/web/index.html"
@@ -66,7 +66,7 @@ tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
 gzip -n "$stage/$package.tar"
 expected_listing=$(printf '%s\n' "$package/" "$package/VERSION" "$package/PPPOE_SUPPORT" "$package/LAN_SUPPORT" \
     "$package/SING_BOX_SUPPORT" "$package/PROXY_ROUTING_SUPPORT" "$package/router-api" \
-    "$package/zapret-alt11.sh" "$package/zapret-nft.sh" "$package/debian-router-zapret.service" \
+    "$package/zapret-alt11.sh" "$package/zapret-nft.sh" "$package/zapret-config.sh" "$package/debian-router-zapret.service" \
     "$package/router-agent" \
     "$package/web/" "$package/web/assets/" "$package/web/assets/app.css" \
     "$package/web/assets/app.js" "$package/web/index.html" | sort)

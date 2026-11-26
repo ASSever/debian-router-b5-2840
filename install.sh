@@ -122,6 +122,7 @@ if [ "$mode" != --check ]; then
     proxy_routing_listing=$(printf '%s\n%s\n' "$sing_box_listing" "$package/PROXY_ROUTING_SUPPORT" | sort)
     zapret_listing=$(printf '%s\n' "$proxy_routing_listing" "$package/zapret-alt11.sh" \
         "$package/zapret-nft.sh" "$package/debian-router-zapret.service" | sort)
+    zapret_profiles_listing=$(printf '%s\n%s\n' "$zapret_listing" "$package/zapret-config.sh" | sort)
     actual_listing=$(tar -tzf "$stage/$archive" | sort)
     has_agent=no
     has_pppoe=no
@@ -129,7 +130,9 @@ if [ "$mode" != --check ]; then
     has_sing_box=no
     has_proxy_routing=no
     has_zapret=no
+    has_zapret_profiles=no
     case "$actual_listing" in
+        "$zapret_profiles_listing") has_agent=yes; has_ui=yes; has_pppoe=yes; has_lan=yes; has_sing_box=yes; has_proxy_routing=yes; has_zapret=yes; has_zapret_profiles=yes ;;
         "$zapret_listing") has_agent=yes; has_ui=yes; has_pppoe=yes; has_lan=yes; has_sing_box=yes; has_proxy_routing=yes; has_zapret=yes ;;
         "$proxy_routing_listing") has_agent=yes; has_ui=yes; has_pppoe=yes; has_lan=yes; has_sing_box=yes; has_proxy_routing=yes ;;
         "$sing_box_listing") has_agent=yes; has_ui=yes; has_pppoe=yes; has_lan=yes; has_sing_box=yes ;;
@@ -207,6 +210,7 @@ if [ "$mode" != --check ]; then
         fi
     fi
     zapret_files='zapret-alt11.sh zapret-nft.sh debian-router-zapret.service'
+    if [ "$has_zapret_profiles" = yes ]; then zapret_files="$zapret_files zapret-config.sh"; fi
     if [ "$has_zapret" = yes ]; then
         for payload in $zapret_files; do
             if [ ! -f "$stage/$package/$payload" ] || [ -L "$stage/$package/$payload" ]; then
@@ -323,6 +327,9 @@ if [ "$mode" != --check ]; then
         if [ "$has_zapret" = yes ]; then
             install -m 0755 "$stage/$package/zapret-alt11.sh" "$stage/$package/zapret-nft.sh" "$release_tmp/"
             install -m 0644 "$stage/$package/debian-router-zapret.service" "$release_tmp/"
+        fi
+        if [ "$has_zapret_profiles" = yes ]; then
+            install -m 0755 "$stage/$package/zapret-config.sh" "$release_tmp/"
         fi
         if [ "$has_ui" = yes ]; then
             install -d -m 0755 "$release_tmp/web" "$release_tmp/web/assets"
@@ -630,7 +637,7 @@ EOF
 
     if [ "$has_zapret" = yes ] && ! prepare_zapret; then
         if [ -s "$stage/zapret-check.log" ]; then cat "$stage/zapret-check.log" >&2; fi
-        echo 'Could not prepare Zapret ALT11; the active release was not changed.' >&2
+        echo 'Could not prepare Zapret; the active release was not changed.' >&2
         exit 7
     fi
 
@@ -959,7 +966,7 @@ EOF
             echo 'Could not install the Zapret unit; the previous release was restored.' >&2
             exit 7
         fi
-        printf 'Zapret profile: ALT11 (%s)\n' "$zapret_unit"
+        printf 'Zapret service: %s\n' "$zapret_unit"
     fi
     printf 'Installed API release: %s\n' "$package_version"
     if [ "$has_agent" = yes ]; then
