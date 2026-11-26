@@ -50,6 +50,7 @@ printf '%s\n' 'profile-v1' > "$stage/$package/PROXY_ROUTING_SUPPORT"
 install -m 0755 "$repo/system/zapret-alt11.sh" "$repo/system/zapret-nft.sh" "$repo/system/zapret-config.sh" "$stage/$package/"
 install -m 0644 "$repo/system/debian-router-zapret.service" "$stage/$package/"
 install -m 0644 "$repo/system/debian-router-monitor.service" "$stage/$package/"
+install -m 0644 "$repo/system/debian-router-failover.service" "$stage/$package/"
 mkdir -p "$stage/$package/web/assets"
 install -m 0644 "$ui_dist/index.html" "$stage/$package/web/index.html"
 install -m 0644 "$ui_dist/assets/app.js" "$stage/$package/web/assets/app.js"
@@ -64,6 +65,9 @@ install -m 0644 "$ui_dist/assets/app.css" "$stage/$package/web/assets/app.css"
 (cd "$repo/backend" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
     go build -trimpath -buildvcs=false -ldflags=-buildid= \
     -o "$stage/$package/router-monitor" ./cmd/router-monitor)
+(cd "$repo/backend" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+    go build -trimpath -buildvcs=false -ldflags=-buildid= \
+    -o "$stage/$package/router-failover" ./cmd/router-failover)
 
 tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
     -C "$stage" -cf "$stage/$package.tar" "$package"
@@ -72,6 +76,7 @@ expected_listing=$(printf '%s\n' "$package/" "$package/VERSION" "$package/PPPOE_
     "$package/SING_BOX_SUPPORT" "$package/PROXY_ROUTING_SUPPORT" "$package/router-api" \
     "$package/zapret-alt11.sh" "$package/zapret-nft.sh" "$package/zapret-config.sh" "$package/debian-router-zapret.service" \
     "$package/router-agent" "$package/router-monitor" "$package/debian-router-monitor.service" \
+    "$package/router-failover" "$package/debian-router-failover.service" \
     "$package/web/" "$package/web/assets/" "$package/web/assets/app.css" \
     "$package/web/assets/app.js" "$package/web/index.html" | sort)
 if [ "$(tar -tzf "$stage/$package.tar.gz" | sort)" != "$expected_listing" ]; then
