@@ -127,7 +127,14 @@ if [ "$mode" != --check ]; then
         "$package/debian-router-monitor.service" | sort)
     failover_listing=$(printf '%s\n' "$monitor_listing" "$package/router-failover" \
         "$package/debian-router-failover.service" | sort)
+    recovery_listing=$(printf '%s\n' "$failover_listing" "$package/router-recovery" \
+        "$package/debian-router-recovery.service" | sort)
     actual_listing=$(tar -tzf "$stage/$archive" | sort)
+    has_recovery=no
+    if [ "$actual_listing" = "$recovery_listing" ]; then
+        has_recovery=yes
+        actual_listing=$failover_listing
+    fi
     has_failover=no
     if [ "$actual_listing" = "$failover_listing" ]; then
         has_failover=yes
@@ -250,6 +257,16 @@ if [ "$mode" != --check ]; then
             fi
         done
     fi
+    recovery_unit=debian-router-recovery.service
+    recovery_files="router-recovery $recovery_unit"
+    if [ "$has_recovery" = yes ]; then
+        for payload in $recovery_files; do
+            if [ ! -f "$stage/$package/$payload" ] || [ -L "$stage/$package/$payload" ]; then
+                echo 'Invalid recovery payload.' >&2
+                exit 5
+            fi
+        done
+    fi
 
     prefix=/opt/debian-router-b5-2840
     release_dir=$prefix/releases/$package_version
@@ -351,6 +368,14 @@ if [ "$mode" != --check ]; then
                 fi
             done
         fi
+        if [ "$has_recovery" = yes ]; then
+            for payload in $recovery_files; do
+                if [ -L "$release_dir/$payload" ] || ! cmp -s "$stage/$package/$payload" "$release_dir/$payload"; then
+                    echo 'Installed recovery files differ from the verified release.' >&2
+                    exit 6
+                fi
+            done
+        fi
     else
         release_tmp=$prefix/releases/.new-$package_version-$$
         install -d -m 0755 "$release_tmp"
@@ -385,6 +410,10 @@ if [ "$mode" != --check ]; then
         if [ "$has_failover" = yes ]; then
             install -m 0755 "$stage/$package/router-failover" "$release_tmp/"
             install -m 0644 "$stage/$package/$failover_unit" "$release_tmp/"
+        fi
+        if [ "$has_recovery" = yes ]; then
+            install -m 0755 "$stage/$package/router-recovery" "$release_tmp/"
+            install -m 0644 "$stage/$package/$recovery_unit" "$release_tmp/"
         fi
         if [ "$has_ui" = yes ]; then
             install -d -m 0755 "$release_tmp/web" "$release_tmp/web/assets"
@@ -736,44 +765,71 @@ EOF
         fi
     }
 
-    failover_config=/etc/debian-router-b5-2840/failover.json
-    failover_service=/etc/systemd/system/$failover_unit
-    failover_changed=no
-    failover_was_active=no
-    failover_was_enabled=no
-    if [ "$has_failover" = yes ]; then
-        if [ -L "$failover_service" ] ||
-            ! sed "s|@RELEASE@|$release_dir|g" "$release_dir/$failover_unit" > "$stage/$failover_unit" ||
-            ! systemd-analyze verify "$stage/$failover_unit"; then
-            echo 'Could not prepare the failover unit.' >&2
-            exit 7
+    prepare_optional_service() {
+        [ "$1" = yes ] || return 0
+        optional_unit=$2
+        if [ -L "/etc/systemd/system/$optional_unit" ] ||
+            ! sed "s|@RELEASE@|$release_dir|g" "$release_dir/$optional_unit" > "$stage/$optional_unit" ||
+            ! systemd-analyze verify "$stage/$optional_unit"; then
+            echo "Could not prepare $optional_unit." >&2
+            return 1
         fi
-        if [ -e "$failover_config" ] && ! "$release_dir/router-failover" check-config; then
-            echo 'Could not validate the failover configuration.' >&2
-            exit 7
+        if [ -e "$4" ] && ! "$release_dir/$3" check-config; then
+            echo "Could not validate the configuration for $optional_unit." >&2
+            return 1
         fi
-    fi
+    }
+    prepare_optional_service "$has_failover" "$failover_unit" router-failover /etc/debian-router-b5-2840/failover.json || exit 7
+    prepare_optional_service "$has_recovery" "$recovery_unit" router-recovery /etc/debian-router-b5-2840/recovery.json || exit 7
 
-    activate_failover() {
-        if [ "$has_failover" = yes ] && cmp -s "$stage/$failover_unit" "$failover_service"; then return 0; fi
-        if [ "$has_failover" = no ] && [ ! -f "$failover_service" ]; then return 0; fi
-        if [ -f "$failover_service" ]; then
-            cp -p "$failover_service" "$stage/previous-failover.service" || return 1
-            if systemctl is-active --quiet "$failover_unit"; then failover_was_active=yes; fi
-            if systemctl is-enabled --quiet "$failover_unit"; then failover_was_enabled=yes; fi
+    activate_optional_service() {
+        optional_unit=$2
+        optional_file=/etc/systemd/system/$optional_unit
+        optional_state=$stage/optional-$optional_unit
+        if [ "$1" = yes ] && cmp -s "$stage/$optional_unit" "$optional_file"; then return 0; fi
+        if [ "$1" = no ] && [ ! -f "$optional_file" ]; then return 0; fi
+        mkdir "$optional_state" || return 1
+        if [ -f "$optional_file" ]; then
+            cp -p "$optional_file" "$optional_state/previous" || return 1
+            if systemctl is-active --quiet "$optional_unit"; then
+                touch "$optional_state/active" || return 1
+            fi
+            if systemctl is-enabled --quiet "$optional_unit"; then
+                touch "$optional_state/enabled" || return 1
+            fi
         fi
-        if [ "$has_failover" = no ]; then
-            failover_changed=yes
-            systemctl disable --now "$failover_unit" || return 1
-            rm -- "$failover_service" || return 1
+        if [ "$1" = no ]; then
+            touch "$optional_state/changed" || return 1
+            systemctl disable --now "$optional_unit" || return 1
+            rm -- "$optional_file" || return 1
             systemctl daemon-reload
             return
         fi
-        install -m 0644 "$stage/$failover_unit" "$failover_service.new.$$" || return 1
-        mv -Tf "$failover_service.new.$$" "$failover_service" || return 1
-        failover_changed=yes
+        install -m 0644 "$stage/$optional_unit" "$optional_file.new.$$" || return 1
+        touch "$optional_state/changed" || return 1
+        mv -Tf "$optional_file.new.$$" "$optional_file" || return 1
         systemctl daemon-reload || return 1
-        if [ "$failover_was_active" = yes ]; then systemctl restart "$failover_unit"; fi
+        if [ -e "$optional_state/active" ]; then systemctl restart "$optional_unit"; fi
+    }
+
+    rollback_optional_service() {
+        optional_unit=$1
+        optional_file=/etc/systemd/system/$optional_unit
+        optional_state=$stage/optional-$optional_unit
+        [ -e "$optional_state/changed" ] || return 0
+        systemctl stop "$optional_unit" || :
+        if [ -f "$optional_state/previous" ]; then
+            mv -Tf "$optional_state/previous" "$optional_file"
+        else
+            rm -f -- "$optional_file"
+        fi
+        rm -f -- "$optional_file.new.$$"
+        systemctl daemon-reload || :
+        if [ -e "$optional_state/enabled" ]; then systemctl enable "$optional_unit" || :; fi
+        if [ -e "$optional_state/active" ]; then
+            systemctl reset-failed "$optional_unit" || :
+            systemctl start "$optional_unit" || :
+        fi
     }
 
     unit_tmp=$stage/debian-router-api.service
@@ -921,20 +977,8 @@ EOF
     fi
 
     rollback_install() {
-        if [ "$failover_changed" = yes ]; then
-            systemctl stop "$failover_unit" || :
-            if [ -f "$stage/previous-failover.service" ]; then
-                mv -Tf "$stage/previous-failover.service" "$failover_service"
-            else
-                rm -f -- "$failover_service"
-            fi
-            systemctl daemon-reload || :
-            if [ "$failover_was_enabled" = yes ]; then systemctl enable "$failover_unit" || :; fi
-            if [ "$failover_was_active" = yes ]; then
-                systemctl reset-failed "$failover_unit" || :
-                systemctl start "$failover_unit" || :
-            fi
-        fi
+        rollback_optional_service "$recovery_unit"
+        rollback_optional_service "$failover_unit"
         if [ "$monitor_changed" = yes ]; then
             systemctl stop "$monitor_unit" || :
             if [ "$monitor_was_enabled" = no ]; then systemctl disable "$monitor_unit" || :; fi
@@ -1138,12 +1182,14 @@ EOF
         exit 7
     fi
     if [ "$has_monitor" = yes ]; then printf 'Monitor service: %s\n' "$monitor_unit"; fi
-    if ! activate_failover; then
+    if ! activate_optional_service "$has_failover" "$failover_unit" ||
+        ! activate_optional_service "$has_recovery" "$recovery_unit"; then
         rollback_install
-        echo 'Could not activate failover; the previous release was restored.' >&2
+        echo 'Could not update the optional proxy services; the previous release was restored.' >&2
         exit 7
     fi
     if [ "$has_failover" = yes ]; then printf 'Failover service: %s\n' "$failover_unit"; fi
+    if [ "$has_recovery" = yes ]; then printf 'Recovery service: %s\n' "$recovery_unit"; fi
     printf 'Installed API release: %s\n' "$package_version"
     if [ "$has_agent" = yes ]; then
         printf 'Privileged agent: active, socket %s\n' '/run/debian-router-agent/agent.sock'
