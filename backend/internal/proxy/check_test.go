@@ -25,7 +25,7 @@ func TestCheckUsesAuthenticatedProxyWithoutDirectFallback(t *testing.T) {
 	defer fixture.Close()
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	reason := requestThroughWorker(ctx, strings.TrimPrefix(fixture.URL, "http://"), auth)
+	reason := requestThroughWorker(ctx, strings.TrimPrefix(fixture.URL, "http://"), auth, CheckURL, nil, http.StatusNoContent)
 	if reason != "proxy_request_failed" || len(requests) != 1 {
 		t.Fatalf("result = %q and proxy requests = %d; expected one rejected CONNECT", reason, len(requests))
 	}

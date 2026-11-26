@@ -13,7 +13,8 @@ import (
 	"time"
 )
 
-const proxyUnit = "debian-router-sing-box.service"
+const ProxyService = "debian-router-sing-box.service"
+const ProfileStatePath = "/var/lib/debian-router-agent/proxy-routing"
 
 var (
 	ErrProfileUnavailable    = errors.New("proxy_profile_unavailable")
@@ -47,6 +48,11 @@ type ProfileManager struct {
 }
 
 func NewProfileManager(root string) *ProfileManager {
+	return NewProfileManagerForUnit(root, ProxyService)
+}
+
+// NewProfileManagerForUnit binds a state directory to its sing-box service.
+func NewProfileManagerForUnit(root, unit string) *ProfileManager {
 	return &ProfileManager{
 		root: root,
 		validate: func(ctx context.Context, config []byte) error {
@@ -57,11 +63,11 @@ func NewProfileManager(root string) *ProfileManager {
 		restart: func(ctx context.Context) error {
 			ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 			defer cancel()
-			_ = exec.CommandContext(ctx, "/usr/bin/systemctl", "reset-failed", proxyUnit).Run()
-			if err := exec.CommandContext(ctx, "/usr/bin/systemctl", "restart", proxyUnit).Run(); err != nil {
+			_ = exec.CommandContext(ctx, "/usr/bin/systemctl", "reset-failed", unit).Run()
+			if err := exec.CommandContext(ctx, "/usr/bin/systemctl", "restart", unit).Run(); err != nil {
 				return err
 			}
-			return exec.CommandContext(ctx, "/usr/bin/systemctl", "is-active", "--quiet", proxyUnit).Run()
+			return exec.CommandContext(ctx, "/usr/bin/systemctl", "is-active", "--quiet", unit).Run()
 		},
 	}
 }
@@ -69,6 +75,13 @@ func NewProfileManager(root string) *ProfileManager {
 func (m *ProfileManager) Status() (Profile, error) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	unlock, err := lockProfiles(ctx, m.root)
+	if err != nil {
+		return Profile{}, ErrProfileUnavailable
+	}
+	defer unlock()
 	if _, err := os.Stat(filepath.Join(m.root, "pending")); !errors.Is(err, os.ErrNotExist) {
 		return Profile{}, ErrProfileUnavailable
 	}
@@ -93,6 +106,11 @@ func (m *ProfileManager) Status() (Profile, error) {
 func (m *ProfileManager) Apply(ctx context.Context, change ProfileChange) error {
 	m.lock.Lock()
 	defer m.lock.Unlock()
+	unlock, err := lockProfiles(ctx, m.root)
+	if err != nil {
+		return ErrProfileUnavailable
+	}
+	defer unlock()
 	if err := m.recover(ctx); err != nil {
 		return err
 	}
@@ -104,10 +122,14 @@ func (m *ProfileManager) Apply(ctx context.Context, change ProfileChange) error 
 	if err != nil {
 		return ErrInvalidProfile
 	}
+	return m.apply(ctx, previous, change.Profile, config)
+}
+
+func (m *ProfileManager) apply(ctx context.Context, previous string, profile Profile, config []byte) error {
 	if err := m.validate(ctx, config); err != nil {
 		return ErrProfileRejected
 	}
-	model, err := json.Marshal(change.Profile)
+	model, err := json.Marshal(profile)
 	if err != nil {
 		return ErrInvalidProfile
 	}
@@ -146,6 +168,14 @@ func (m *ProfileManager) Apply(ctx context.Context, change ProfileChange) error 
 func (m *ProfileManager) Recover(ctx context.Context) error {
 	m.lock.Lock()
 	defer m.lock.Unlock()
+	unlock, err := lockProfiles(ctx, m.root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return ErrProfileUnavailable
+	}
+	defer unlock()
 	return m.recover(ctx)
 }
 

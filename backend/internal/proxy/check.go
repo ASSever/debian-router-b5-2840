@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"io"
@@ -53,6 +54,10 @@ func checkServer(ctx context.Context, binary string, server Server) string {
 		return reason
 	}
 	outbound["server"] = ip.String()
+	return checkWorker(ctx, binary, outbound, CheckURL, nil, http.StatusNoContent)
+}
+
+func checkWorker(ctx context.Context, binary string, outbound map[string]any, target string, trust *tls.Config, expected int) string {
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		return "worker_unavailable"
@@ -62,12 +67,13 @@ func checkServer(ctx context.Context, binary string, server Server) string {
 	password := rand.Text()
 	config, err := json.Marshal(map[string]any{
 		"log": map[string]any{"disabled": true},
+		"dns": map[string]any{"servers": []map[string]string{{"type": "local", "tag": "local-dns"}}},
 		"inbounds": []map[string]any{{
 			"type": "http", "listen": "127.0.0.1", "listen_port": local.Port,
 			"users": []map[string]string{{"username": "check", "password": password}},
 		}},
 		"outbounds": []map[string]any{outbound},
-		"route":     map[string]string{"final": "selected"},
+		"route":     map[string]string{"final": "selected", "default_domain_resolver": "local-dns"},
 	})
 	if err != nil || binary == "" {
 		return "worker_unavailable"
@@ -100,7 +106,7 @@ func checkServer(ctx context.Context, binary string, server Server) string {
 	if !waitForWorker(ctx, local.String(), done) {
 		return "worker_start_failed"
 	}
-	return requestThroughWorker(ctx, local.String(), password)
+	return requestThroughWorker(ctx, local.String(), password, target, trust, expected)
 }
 
 func commandWithConfig(ctx context.Context, binary, action string, config []byte) *exec.Cmd {
@@ -134,18 +140,19 @@ func waitForWorker(ctx context.Context, address string, done <-chan struct{}) bo
 	}
 }
 
-func requestThroughWorker(ctx context.Context, address, password string) string {
+func requestThroughWorker(ctx context.Context, address, password, target string, trust *tls.Config, expected int) string {
 	proxyURL := &url.URL{Scheme: "http", Host: address, User: url.UserPassword("check", password)}
 	transport := &http.Transport{
 		Proxy:                  http.ProxyURL(proxyURL),
 		DisableKeepAlives:      true,
 		MaxResponseHeaderBytes: 16 << 10,
+		TLSClientConfig:        trust,
 	}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, CheckURL, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return "worker_unavailable"
 	}
@@ -158,7 +165,7 @@ func requestThroughWorker(ctx context.Context, address, password string) string 
 		return "proxy_request_failed"
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusNoContent {
+	if response.StatusCode != expected {
 		return "unexpected_http_status"
 	}
 	return ""
