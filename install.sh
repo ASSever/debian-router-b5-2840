@@ -123,6 +123,8 @@ if [ "$mode" != --check ]; then
     zapret_listing=$(printf '%s\n' "$proxy_routing_listing" "$package/zapret-alt11.sh" \
         "$package/zapret-nft.sh" "$package/debian-router-zapret.service" | sort)
     zapret_profiles_listing=$(printf '%s\n%s\n' "$zapret_listing" "$package/zapret-config.sh" | sort)
+    monitor_listing=$(printf '%s\n' "$zapret_profiles_listing" "$package/router-monitor" \
+        "$package/debian-router-monitor.service" | sort)
     actual_listing=$(tar -tzf "$stage/$archive" | sort)
     has_agent=no
     has_pppoe=no
@@ -131,7 +133,9 @@ if [ "$mode" != --check ]; then
     has_proxy_routing=no
     has_zapret=no
     has_zapret_profiles=no
+    has_monitor=no
     case "$actual_listing" in
+        "$monitor_listing") has_agent=yes; has_ui=yes; has_pppoe=yes; has_lan=yes; has_sing_box=yes; has_proxy_routing=yes; has_zapret=yes; has_zapret_profiles=yes; has_monitor=yes ;;
         "$zapret_profiles_listing") has_agent=yes; has_ui=yes; has_pppoe=yes; has_lan=yes; has_sing_box=yes; has_proxy_routing=yes; has_zapret=yes; has_zapret_profiles=yes ;;
         "$zapret_listing") has_agent=yes; has_ui=yes; has_pppoe=yes; has_lan=yes; has_sing_box=yes; has_proxy_routing=yes; has_zapret=yes ;;
         "$proxy_routing_listing") has_agent=yes; has_ui=yes; has_pppoe=yes; has_lan=yes; has_sing_box=yes; has_proxy_routing=yes ;;
@@ -215,6 +219,16 @@ if [ "$mode" != --check ]; then
         for payload in $zapret_files; do
             if [ ! -f "$stage/$package/$payload" ] || [ -L "$stage/$package/$payload" ]; then
                 echo 'Invalid Zapret payload.' >&2
+                exit 5
+            fi
+        done
+    fi
+    monitor_unit=debian-router-monitor.service
+    monitor_files="router-monitor $monitor_unit"
+    if [ "$has_monitor" = yes ]; then
+        for payload in $monitor_files; do
+            if [ ! -f "$stage/$package/$payload" ] || [ -L "$stage/$package/$payload" ]; then
+                echo 'Invalid monitor payload.' >&2
                 exit 5
             fi
         done
@@ -304,6 +318,14 @@ if [ "$mode" != --check ]; then
                 fi
             done
         fi
+        if [ "$has_monitor" = yes ]; then
+            for payload in $monitor_files; do
+                if [ -L "$release_dir/$payload" ] || ! cmp -s "$stage/$package/$payload" "$release_dir/$payload"; then
+                    echo 'Installed monitor files differ from the verified release.' >&2
+                    exit 6
+                fi
+            done
+        fi
     else
         release_tmp=$prefix/releases/.new-$package_version-$$
         install -d -m 0755 "$release_tmp"
@@ -330,6 +352,10 @@ if [ "$mode" != --check ]; then
         fi
         if [ "$has_zapret_profiles" = yes ]; then
             install -m 0755 "$stage/$package/zapret-config.sh" "$release_tmp/"
+        fi
+        if [ "$has_monitor" = yes ]; then
+            install -m 0755 "$stage/$package/router-monitor" "$release_tmp/"
+            install -m 0644 "$stage/$package/$monitor_unit" "$release_tmp/"
         fi
         if [ "$has_ui" = yes ]; then
             install -d -m 0755 "$release_tmp/web" "$release_tmp/web/assets"
@@ -641,6 +667,46 @@ EOF
         exit 7
     fi
 
+    monitor_service=/etc/systemd/system/$monitor_unit
+    monitor_changed=no
+    monitor_was_active=no
+    monitor_was_enabled=no
+    if [ "$has_monitor" = yes ]; then
+        if [ -L "$monitor_service" ] ||
+            ! "$release_dir/router-monitor" check-config ||
+            ! sed "s|@RELEASE@|$release_dir|g" "$release_dir/$monitor_unit" > "$stage/$monitor_unit" ||
+            ! systemd-analyze verify "$stage/$monitor_unit"; then
+            echo 'Could not prepare the monitor unit; the active release was not changed.' >&2
+            exit 7
+        fi
+    fi
+
+    activate_monitor() {
+        if [ "$has_monitor" = yes ] && cmp -s "$stage/$monitor_unit" "$monitor_service"; then return 0; fi
+        if [ "$has_monitor" = no ] && [ ! -f "$monitor_service" ]; then return 0; fi
+        if [ -f "$monitor_service" ]; then
+            cp -p "$monitor_service" "$stage/previous-monitor.service" || return 1
+            if systemctl is-active --quiet "$monitor_unit"; then monitor_was_active=yes; fi
+            if systemctl is-enabled --quiet "$monitor_unit"; then monitor_was_enabled=yes; fi
+        fi
+        if [ "$has_monitor" = no ]; then
+            monitor_changed=yes
+            systemctl disable --now "$monitor_unit" || return 1
+            rm -- "$monitor_service" || return 1
+            systemctl daemon-reload
+            return
+        fi
+        install -m 0644 "$stage/$monitor_unit" "$monitor_service.new.$$" || return 1
+        mv -Tf "$monitor_service.new.$$" "$monitor_service" || return 1
+        monitor_changed=yes
+        systemctl daemon-reload || return 1
+        if [ ! -f "$stage/previous-monitor.service" ]; then
+            systemctl enable --now "$monitor_unit"
+        elif [ "$monitor_was_active" = yes ]; then
+            systemctl restart "$monitor_unit"
+        fi
+    }
+
     unit_tmp=$stage/debian-router-api.service
     if [ "$has_agent" = yes ]; then
         cat > "$unit_tmp" <<'EOF'
@@ -786,6 +852,21 @@ EOF
     fi
 
     rollback_install() {
+        if [ "$monitor_changed" = yes ]; then
+            systemctl stop "$monitor_unit" || :
+            if [ "$monitor_was_enabled" = no ]; then systemctl disable "$monitor_unit" || :; fi
+            if [ -f "$stage/previous-monitor.service" ]; then
+                mv -Tf "$stage/previous-monitor.service" "$monitor_service"
+            else
+                rm -f -- "$monitor_service"
+            fi
+            systemctl daemon-reload || :
+            if [ "$monitor_was_enabled" = yes ]; then systemctl enable "$monitor_unit" || :; fi
+            if [ "$monitor_was_active" = yes ]; then
+                systemctl reset-failed "$monitor_unit" || :
+                systemctl start "$monitor_unit" || :
+            fi
+        fi
         if [ "$zapret_unit_changed" = yes ]; then
             if [ -f "$stage/previous-zapret.service" ]; then
                 cp -p "$stage/previous-zapret.service" "$zapret_service.new.$$"
@@ -968,6 +1049,12 @@ EOF
         fi
         printf 'Zapret service: %s\n' "$zapret_unit"
     fi
+    if ! activate_monitor; then
+        rollback_install
+        echo 'Could not activate the monitor; the previous release was restored.' >&2
+        exit 7
+    fi
+    if [ "$has_monitor" = yes ]; then printf 'Monitor service: %s\n' "$monitor_unit"; fi
     printf 'Installed API release: %s\n' "$package_version"
     if [ "$has_agent" = yes ]; then
         printf 'Privileged agent: active, socket %s\n' '/run/debian-router-agent/agent.sock'
