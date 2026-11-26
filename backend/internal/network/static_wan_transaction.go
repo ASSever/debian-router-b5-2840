@@ -66,6 +66,7 @@ type StaticWANManager struct {
 	now        func() time.Time
 	run        commandRunner
 	readStatus func(string) (ActiveNetworkStatus, error)
+	traffic    trafficState
 }
 
 type commandRunner func(context.Context, string, ...string) (string, error)
