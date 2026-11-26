@@ -386,10 +386,16 @@ func (m *StaticWANManager) lanNetAdmin(ctx context.Context, argv ...string) erro
 }
 
 func (m *StaticWANManager) runNetAdmin(ctx context.Context, argv ...string) (string, error) {
+	return m.runNetAdminWithProperties(ctx, nil, argv...)
+}
+
+func (m *StaticWANManager) runNetAdminWithProperties(ctx context.Context, properties []string, argv ...string) (string, error) {
 	args := []string{"--system", "--quiet", "--wait", "--pipe", "--collect", "--property=Type=oneshot",
 		"--property=CapabilityBoundingSet=CAP_NET_ADMIN", "--property=NoNewPrivileges=yes",
 		"--property=ProtectSystem=strict", "--property=ProtectHome=yes",
-		"--property=RestrictAddressFamilies=AF_UNIX AF_NETLINK", "--"}
+		"--property=RestrictAddressFamilies=AF_UNIX AF_NETLINK"}
+	args = append(args, properties...)
+	args = append(args, "--")
 	return m.run(ctx, "/usr/bin/systemd-run", append(args, argv...)...)
 }
 

@@ -43,6 +43,7 @@ type Request struct {
 
 // Response contains harmless status data or a stable error code.
 type Response struct {
+	Traffic              *networkinventory.TrafficSnapshot      `json:"traffic,omitempty"`
 	ProxyProfile         *proxy.Profile                         `json:"proxy_profile,omitempty"`
 	WANProbeState        *networkinventory.WANProbeState        `json:"wan_probe_state,omitempty"`
 	RoutingStatus        *networkinventory.RoutingStatus        `json:"routing_status,omitempty"`
@@ -106,6 +107,16 @@ func Serve(ctx context.Context, socketPath string, allowedGID uint32) error {
 		log.Printf("restore proxy profile: %v", err)
 	}
 	go manager.MaintainFirewall(ctx)
+	trafficContext, stopTraffic := context.WithCancel(ctx)
+	trafficDone := make(chan struct{})
+	go func() {
+		defer close(trafficDone)
+		manager.MaintainTraffic(trafficContext)
+	}()
+	defer func() {
+		stopTraffic()
+		<-trafficDone
+	}()
 	return serveWithAllOperations(ctx, socketPath, allowedGID, networkinventory.ReadDHCPStatus, manager, pppoe)
 }
 
@@ -262,7 +273,11 @@ func sendRequest(ctx context.Context, socketPath string, request Request) (Respo
 		}
 	}
 
-	decoder := json.NewDecoder(io.LimitReader(connection, maxResponseBytes))
+	responseLimit := int64(maxResponseBytes)
+	if request.Operation == "traffic-status" {
+		responseLimit = 1 << 20
+	}
+	decoder := json.NewDecoder(io.LimitReader(connection, responseLimit))
 	decoder.DisallowUnknownFields()
 	var response Response
 	if err := decoder.Decode(&response); err != nil {
@@ -391,7 +406,7 @@ func handleConnectionWithAllOperations(
 		writeResponse(connection, Response{ProxyProfile: &profile})
 		return
 	case "lan-status", "lan-apply", "lan-confirm", "reservation-list", "reservation-change", "lan-dns-status", "lan-dns-save", "lan-dns-clear",
-		"firewall-status", "firewall-apply", "firewall-rules-status", "firewall-rules-apply", "routing-status", "routing-apply":
+		"firewall-status", "firewall-apply", "firewall-rules-status", "firewall-rules-apply", "routing-status", "routing-apply", "traffic-status":
 		if request.Interface != "" || request.StaticWANConfig != nil || request.PPPoEConfig != nil || request.WANLineConfig != nil ||
 			(request.Operation == "lan-apply") != (request.LANConfig != nil) ||
 			(request.Operation == "lan-dns-save") != (request.DNSConfig != nil) ||
@@ -634,6 +649,13 @@ func writeResponse(writer io.Writer, response Response) {
 
 func handleLANRequest(ctx context.Context, manager *networkinventory.StaticWANManager, request Request) Response {
 	switch request.Operation {
+	case "traffic-status":
+		snapshot, err := manager.Traffic(ctx)
+		if err != nil {
+			log.Printf("read traffic accounting: %v", err)
+			return Response{Error: "traffic_unavailable"}
+		}
+		return Response{Traffic: &snapshot}
 	case "routing-status":
 		result, err := manager.RoutingStatus(ctx)
 		if err != nil {
