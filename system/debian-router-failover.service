@@ -1,0 +1,27 @@
+[Unit]
+Description=Debian Router Zapret and Proxy Failover
+After=network.target debian-router-zapret.service debian-router-sing-box.service
+ConditionPathExists=/etc/debian-router-b5-2840/failover.json
+
+[Service]
+Type=notify
+ExecStart=@RELEASE@/router-failover
+ExecStopPost=/usr/sbin/nft destroy table ip b5_failover
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=15s
+TimeoutStopSec=5s
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -44,6 +44,10 @@ table inet b5_zapret {
         iifname "$lan" oifname "$wan" ct direction original ct original packets 1-12 tcp dport {80,443,2053,2083,2087,2096,8443} meta mark set meta mark | 0x02000000
         iifname "$lan" oifname "$wan" ct direction original ct original packets 1-12 udp dport {443,19294-19344,50000-50100} meta mark set meta mark | 0x02000000
     }
+    chain mark_health_probe {
+        type filter hook output priority filter; policy accept;
+        oifname "$wan" meta mark & 0x01000000 != 0 ct direction original ct original packets 1-12 tcp dport 443 counter meta mark set meta mark | 0x02000000
+    }
     chain process_forwarded {
         type filter hook postrouting priority srcnat + 1; policy accept;
         oifname "$wan" meta mark & 0x02000000 != 0 meta mark set meta mark & 0xfdffffff counter queue num 62232 bypass
