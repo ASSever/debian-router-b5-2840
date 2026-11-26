@@ -109,6 +109,8 @@ if [ "$active" = active ] && ! systemctl restart "$unit"; then
     else
         rm -- "$current"
     fi
+    # The failed attempt may have consumed the last start allowed by systemd.
+    systemctl reset-failed "$unit" || :
     if ! systemctl restart "$unit"; then
         echo 'Previous Zapret configuration restored, but the service could not restart.' >&2
         exit 1
