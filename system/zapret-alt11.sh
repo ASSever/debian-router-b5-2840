@@ -58,13 +58,14 @@ case "$profile" in
 esac
 
 # Keep the original ALT11 strategy order. The TCP profile disables its UDP strategies.
+# Raw Discord/STUN has no hostname, so its separate strategy takes no domain list.
 exec "$bin/nfqws" "$@" \
     --qnum=62232 --dpi-desync-fwmark=0x40000000 \
     ${skip_udp:+"$skip_udp"} ${custom_hosts:+"$custom_hosts"} \
     --filter-udp=443 --hostlist="$lists/list-general.txt" \
     --hostlist-exclude="$excluded_hosts" --ipset-exclude="$excluded_ips" \
     --dpi-desync=fake --dpi-desync-repeats=11 --dpi-desync-fake-quic="$google_quic" --new \
-    ${skip_udp:+"$skip_udp"} ${custom_hosts:+"$custom_hosts"} \
+    ${skip_udp:+"$skip_udp"} \
     --filter-udp=19294-19344,50000-50100 --filter-l7=discord,stun \
     --dpi-desync=fake --dpi-desync-repeats=6 \
     --dpi-desync-fake-discord="$discord_udp" --dpi-desync-fake-stun="$discord_udp" --new \

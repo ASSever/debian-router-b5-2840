@@ -34,7 +34,9 @@ case "$2" in
 esac
 
 release=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
-install -d -m 0700 "$state"
+# The bundled nfqws drops to this group and still needs to read its hostlists.
+nfqws_group=2147483647
+install -d -m 0710 -g "$nfqws_group" "$state"
 candidate=$(mktemp -d "$state/profile.XXXXXXXX")
 switch_link=$candidate/current
 cleanup() {
@@ -71,6 +73,9 @@ if [ "$#" -eq 3 ]; then
     ' < "$3" > "$candidate/exclude-hosts.txt"
 fi
 
+chgrp -- "$nfqws_group" "$candidate" "$candidate/exclude-hosts.txt"
+chmod 0710 "$candidate"
+chmod 0640 "$candidate/exclude-hosts.txt"
 if ! ZAPRET_CONFIG_DIR=$candidate "$release/zapret-alt11.sh" "$release/zapret-assets" --dry-run > /dev/null 2>&1; then
     echo 'Zapret rejected the proposed configuration.' >&2
     exit 1
