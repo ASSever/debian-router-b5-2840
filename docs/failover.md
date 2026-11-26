@@ -31,4 +31,6 @@ sudo journalctl -u debian-router-failover.service -n 20
 sudo nft list table ip b5_failover
 ```
 
-Для остановки выполните `sudo systemctl disable --now debian-router-failover.service`. Служба удаляет свою таблицу nftables. UDP, IPv6 и остальные назначения следуют действующим правилам роутера.
+Для ретранслятора зарезервирован TCP-порт 18084 на адресе маршрутизатора в LAN. Он принимает только соединения, перенаправленные для настроенной цели. Служба владеет таблицей nftables `ip b5_failover` и удаляет её при остановке.
+
+Для остановки выполните `sudo systemctl disable --now debian-router-failover.service`. UDP, IPv6 и остальные назначения следуют действующим правилам роутера.
