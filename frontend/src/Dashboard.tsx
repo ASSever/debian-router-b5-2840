@@ -203,7 +203,21 @@ function DashboardContent() {
       {access === "signed-in" && (
         <>
           <div className="dashboard-actions">
-            <FailureReport />
+            <Download
+              label="Download failure report"
+              filename="router-failure-report.json"
+              endpoint="/api/diagnostics/report"
+              errorMessage="The failure report could not be downloaded. Try again."
+            />
+            <Download
+              label="Download backup"
+              filename="router-backup.zip"
+              endpoint="/api/backup"
+              method="POST"
+              errorMessage="The backup could not be downloaded. Try again after pending changes are resolved."
+            >
+              The backup can contain credentials. Store it securely.
+            </Download>
             <button
               className="refresh-button"
               type="button"
@@ -222,7 +236,21 @@ function DashboardContent() {
   );
 }
 
-function FailureReport() {
+function Download({
+  label,
+  filename,
+  endpoint,
+  method = "GET",
+  errorMessage,
+  children,
+}: {
+  label: string;
+  filename: string;
+  endpoint: string;
+  method?: "GET" | "POST";
+  errorMessage: string;
+  children?: string;
+}) {
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState("");
 
@@ -230,23 +258,24 @@ function FailureReport() {
     setDownloading(true);
     setError("");
     try {
-      const response = await fetch("/api/diagnostics/report", {
+      const response = await fetch(endpoint, {
+        method,
         cache: "no-store",
-        signal: AbortSignal.timeout(25_000),
+        signal: AbortSignal.timeout(method === "POST" ? 140_000 : 25_000),
       });
       if (response.status === 401 || response.status === 403) {
-        setError("Sign in as administrator to download the report.");
+        setError("Sign in as administrator to download this file.");
         return;
       }
-      if (!response.ok) throw new Error("Report unavailable");
+      if (!response.ok) throw new Error("Download unavailable");
       const url = URL.createObjectURL(await response.blob());
       const link = document.createElement("a");
       link.href = url;
-      link.download = "router-failure-report.json";
+      link.download = filename;
       link.click();
       window.setTimeout(URL.revokeObjectURL, 1000, url);
     } catch {
-      setError("The failure report could not be downloaded. Try again.");
+      setError(errorMessage);
     } finally {
       setDownloading(false);
     }
@@ -260,8 +289,9 @@ function FailureReport() {
         disabled={downloading}
         onClick={() => void download()}
       >
-        {downloading ? "Preparing report…" : "Download failure report"}
+        {downloading ? "Preparing download…" : label}
       </button>
+      {children && <p>{children}</p>}
       {error && <p role="alert">{error}</p>}
     </div>
   );
