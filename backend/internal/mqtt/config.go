@@ -22,6 +22,7 @@ type Config struct {
 	ClientID        string `json:"client_id"`
 	TopicPrefix     string `json:"topic_prefix"`
 	IntervalSeconds int    `json:"interval_seconds"`
+	Discovery       bool   `json:"home_assistant_discovery"`
 }
 
 var clientIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,23}$`)

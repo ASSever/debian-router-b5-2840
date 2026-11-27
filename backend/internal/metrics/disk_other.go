@@ -2,4 +2,6 @@
 
 package metrics
 
-func diskSpace(string) *Space { return nil }
+import "github.com/ASSever/debian-router-b5-2840/backend/internal/hostmetrics"
+
+func diskSpace(string) *hostmetrics.Space { return nil }

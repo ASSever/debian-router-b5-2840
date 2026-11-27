@@ -6,11 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
-	"os"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ASSever/debian-router-b5-2840/backend/internal/hostmetrics"
 	"github.com/ASSever/debian-router-b5-2840/backend/internal/network"
 	paho "github.com/eclipse/paho.mqtt.golang"
 )
@@ -22,15 +21,18 @@ type routerStatus struct {
 	Uptime    *uint64   `json:"uptime_seconds"`
 	WAN       *bool     `json:"wan_carrier"`
 	LAN       *bool     `json:"lan_carrier"`
+	RAMUsed   *uint64   `json:"ram_used_bytes"`
+	CPUTemp   *float64  `json:"cpu_temperature_c"`
 }
 
 func sampleStatus() routerStatus {
-	status := routerStatus{SampledAt: time.Now().UTC()}
-	if data, err := os.ReadFile("/proc/uptime"); err == nil {
-		seconds, _, _ := strings.Cut(string(data), ".")
-		if uptime, err := strconv.ParseUint(seconds, 10, 64); err == nil {
-			status.Uptime = &uptime
-		}
+	status := routerStatus{SampledAt: time.Now().UTC(), CPUTemp: hostmetrics.CPUTemperature()}
+	if value := hostmetrics.UptimeSeconds(); value != nil {
+		uptime := uint64(*value)
+		status.Uptime = &uptime
+	}
+	if memory := hostmetrics.Memory(); memory != nil {
+		status.RAMUsed = &memory.Used
 	}
 	links, _ := network.ReadInterfaces()
 	for _, link := range links {
@@ -103,6 +105,13 @@ func runSession(ctx context.Context, config Config, credentials Credentials) boo
 		}
 		client.Disconnect(200)
 	}()
+	for _, message := range discoveryMessages(config) {
+		payload, err := json.Marshal(message.payload)
+		if err != nil || await(ctx, client.Publish(message.topic, 1, true, payload)) != nil {
+			log.Print("MQTT discovery publish failed. Retrying.")
+			return false
+		}
+	}
 	publish := func() bool {
 		payload, err := json.Marshal(sampleStatus())
 		return err == nil && await(ctx, client.Publish(statusTopic, 1, true, payload)) == nil
