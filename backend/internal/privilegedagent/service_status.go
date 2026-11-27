@@ -15,6 +15,7 @@ var dashboardUnits = []string{
 	"debian-router-api.service", "debian-router-agent.service", "systemd-networkd.service",
 	"debian-router-lan-dnsmasq.service", "debian-router-sing-box.service", "debian-router-zapret.service",
 	"debian-router-monitor.service", "debian-router-failover.service", "debian-router-recovery.service",
+	"debian-router-mqtt.service",
 }
 
 func readServiceStates(ctx context.Context) []ServiceState {

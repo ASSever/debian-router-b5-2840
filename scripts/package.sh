@@ -52,6 +52,7 @@ install -m 0644 "$repo/system/debian-router-zapret.service" "$stage/$package/"
 install -m 0644 "$repo/system/debian-router-monitor.service" "$stage/$package/"
 install -m 0644 "$repo/system/debian-router-failover.service" "$stage/$package/"
 install -m 0644 "$repo/system/debian-router-recovery.service" "$stage/$package/"
+install -m 0644 "$repo/system/debian-router-mqtt.service" "$stage/$package/"
 mkdir -p "$stage/$package/web/assets"
 install -m 0644 "$ui_dist/index.html" "$stage/$package/web/index.html"
 install -m 0644 "$ui_dist/assets/app.js" "$stage/$package/web/assets/app.js"
@@ -72,6 +73,9 @@ install -m 0644 "$ui_dist/assets/app.css" "$stage/$package/web/assets/app.css"
 (cd "$repo/backend" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
     go build -trimpath -buildvcs=false -ldflags=-buildid= \
     -o "$stage/$package/router-recovery" ./cmd/router-recovery)
+(cd "$repo/backend" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+    go build -trimpath -buildvcs=false -ldflags=-buildid= \
+    -o "$stage/$package/router-mqtt" ./cmd/router-mqtt)
 
 tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
     -C "$stage" -cf "$stage/$package.tar" "$package"
@@ -82,6 +86,7 @@ expected_listing=$(printf '%s\n' "$package/" "$package/VERSION" "$package/PPPOE_
     "$package/router-agent" "$package/router-monitor" "$package/debian-router-monitor.service" \
     "$package/router-failover" "$package/debian-router-failover.service" \
     "$package/router-recovery" "$package/debian-router-recovery.service" \
+    "$package/router-mqtt" "$package/debian-router-mqtt.service" \
     "$package/web/" "$package/web/assets/" "$package/web/assets/app.css" \
     "$package/web/assets/app.js" "$package/web/index.html" | sort)
 if [ "$(tar -tzf "$stage/$package.tar.gz" | sort)" != "$expected_listing" ]; then

@@ -129,7 +129,14 @@ if [ "$mode" != --check ]; then
         "$package/debian-router-failover.service" | sort)
     recovery_listing=$(printf '%s\n' "$failover_listing" "$package/router-recovery" \
         "$package/debian-router-recovery.service" | sort)
+    mqtt_listing=$(printf '%s\n' "$recovery_listing" "$package/router-mqtt" \
+        "$package/debian-router-mqtt.service" | sort)
     actual_listing=$(tar -tzf "$stage/$archive" | sort)
+    has_mqtt=no
+    if [ "$actual_listing" = "$mqtt_listing" ]; then
+        has_mqtt=yes
+        actual_listing=$recovery_listing
+    fi
     has_recovery=no
     if [ "$actual_listing" = "$recovery_listing" ]; then
         has_recovery=yes
@@ -268,6 +275,17 @@ if [ "$mode" != --check ]; then
         done
     fi
 
+    mqtt_unit=debian-router-mqtt.service
+    mqtt_files="router-mqtt $mqtt_unit"
+    if [ "$has_mqtt" = yes ]; then
+        for payload in $mqtt_files; do
+            if [ ! -f "$stage/$package/$payload" ] || [ -L "$stage/$package/$payload" ]; then
+                echo 'Invalid MQTT payload.' >&2
+                exit 5
+            fi
+        done
+    fi
+
     prefix=/opt/debian-router-b5-2840
     release_dir=$prefix/releases/$package_version
     service=/etc/systemd/system/debian-router-api.service
@@ -368,6 +386,15 @@ if [ "$mode" != --check ]; then
                 fi
             done
         fi
+        if [ "$has_mqtt" = yes ]; then
+            for payload in $mqtt_files; do
+                if [ ! -f "$release_dir/$payload" ] || [ -L "$release_dir/$payload" ] ||
+                    ! cmp -s "$stage/$package/$payload" "$release_dir/$payload"; then
+                    echo 'Installed MQTT files differ from the verified release.' >&2
+                    exit 6
+                fi
+            done
+        fi
         if [ "$has_recovery" = yes ]; then
             for payload in $recovery_files; do
                 if [ -L "$release_dir/$payload" ] || ! cmp -s "$stage/$package/$payload" "$release_dir/$payload"; then
@@ -414,6 +441,10 @@ if [ "$mode" != --check ]; then
         if [ "$has_recovery" = yes ]; then
             install -m 0755 "$stage/$package/router-recovery" "$release_tmp/"
             install -m 0644 "$stage/$package/$recovery_unit" "$release_tmp/"
+        fi
+        if [ "$has_mqtt" = yes ]; then
+            install -m 0755 "$stage/$package/router-mqtt" "$release_tmp/"
+            install -m 0644 "$stage/$package/$mqtt_unit" "$release_tmp/"
         fi
         if [ "$has_ui" = yes ]; then
             install -d -m 0755 "$release_tmp/web" "$release_tmp/web/assets"
@@ -781,6 +812,7 @@ EOF
     }
     prepare_optional_service "$has_failover" "$failover_unit" router-failover /etc/debian-router-b5-2840/failover.json || exit 7
     prepare_optional_service "$has_recovery" "$recovery_unit" router-recovery /etc/debian-router-b5-2840/recovery.json || exit 7
+    prepare_optional_service "$has_mqtt" "$mqtt_unit" router-mqtt /etc/debian-router-b5-2840/mqtt.json || exit 7
 
     activate_optional_service() {
         optional_unit=$2
@@ -977,6 +1009,7 @@ EOF
     fi
 
     rollback_install() {
+        rollback_optional_service "$mqtt_unit"
         rollback_optional_service "$recovery_unit"
         rollback_optional_service "$failover_unit"
         if [ "$monitor_changed" = yes ]; then
@@ -1183,13 +1216,15 @@ EOF
     fi
     if [ "$has_monitor" = yes ]; then printf 'Monitor service: %s\n' "$monitor_unit"; fi
     if ! activate_optional_service "$has_failover" "$failover_unit" ||
-        ! activate_optional_service "$has_recovery" "$recovery_unit"; then
+        ! activate_optional_service "$has_recovery" "$recovery_unit" ||
+        ! activate_optional_service "$has_mqtt" "$mqtt_unit"; then
         rollback_install
         echo 'Could not update the optional proxy services; the previous release was restored.' >&2
         exit 7
     fi
     if [ "$has_failover" = yes ]; then printf 'Failover service: %s\n' "$failover_unit"; fi
     if [ "$has_recovery" = yes ]; then printf 'Recovery service: %s\n' "$recovery_unit"; fi
+    if [ "$has_mqtt" = yes ]; then printf 'MQTT service: %s\n' "$mqtt_unit"; fi
     printf 'Installed API release: %s\n' "$package_version"
     if [ "$has_agent" = yes ]; then
         printf 'Privileged agent: active, socket %s\n' '/run/debian-router-agent/agent.sock'
