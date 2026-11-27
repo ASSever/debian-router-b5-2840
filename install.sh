@@ -133,7 +133,13 @@ if [ "$mode" != --check ]; then
         "$package/debian-router-mqtt.service" | sort)
     ddns_listing=$(printf '%s\n' "$mqtt_listing" "$package/router-ddns" \
         "$package/debian-router-ddns.service" | sort)
+    rs232_listing=$(printf '%s\n' "$ddns_listing" "$package/router-rs232" | sort)
     actual_listing=$(tar -tzf "$stage/$archive" | sort)
+    has_rs232=no
+    if [ "$actual_listing" = "$rs232_listing" ]; then
+        has_rs232=yes
+        actual_listing=$ddns_listing
+    fi
     has_ddns=no
     if [ "$actual_listing" = "$ddns_listing" ]; then
         has_ddns=yes
@@ -303,6 +309,12 @@ if [ "$mode" != --check ]; then
         done
     fi
 
+    if [ "$has_rs232" = yes ] &&
+        { [ ! -f "$stage/$package/router-rs232" ] || [ -L "$stage/$package/router-rs232" ]; }; then
+        echo 'Invalid RS232 payload.' >&2
+        exit 5
+    fi
+
     prefix=/opt/debian-router-b5-2840
     release_dir=$prefix/releases/$package_version
     service=/etc/systemd/system/debian-router-api.service
@@ -403,6 +415,12 @@ if [ "$mode" != --check ]; then
                 fi
             done
         fi
+        if [ "$has_rs232" = yes ] &&
+            { [ ! -f "$release_dir/router-rs232" ] || [ -L "$release_dir/router-rs232" ] ||
+                ! cmp -s "$stage/$package/router-rs232" "$release_dir/router-rs232"; }; then
+            echo 'Installed RS232 file differs from the verified release.' >&2
+            exit 6
+        fi
         if [ "$has_ddns" = yes ]; then
             for payload in $ddns_files; do
                 if [ ! -f "$release_dir/$payload" ] || [ -L "$release_dir/$payload" ] ||
@@ -475,6 +493,9 @@ if [ "$mode" != --check ]; then
         if [ "$has_ddns" = yes ]; then
             install -m 0755 "$stage/$package/router-ddns" "$release_tmp/"
             install -m 0644 "$stage/$package/$ddns_unit" "$release_tmp/"
+        fi
+        if [ "$has_rs232" = yes ]; then
+            install -m 0755 "$stage/$package/router-rs232" "$release_tmp/"
         fi
         if [ "$has_ui" = yes ]; then
             install -d -m 0755 "$release_tmp/web" "$release_tmp/web/assets"
