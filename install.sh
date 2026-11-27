@@ -134,7 +134,13 @@ if [ "$mode" != --check ]; then
     ddns_listing=$(printf '%s\n' "$mqtt_listing" "$package/router-ddns" \
         "$package/debian-router-ddns.service" | sort)
     rs232_listing=$(printf '%s\n' "$ddns_listing" "$package/router-rs232" | sort)
+    containers_listing=$(printf '%s\n' "$rs232_listing" "$package/router-containers.sh" | sort)
     actual_listing=$(tar -tzf "$stage/$archive" | sort)
+    has_containers=no
+    if [ "$actual_listing" = "$containers_listing" ]; then
+        has_containers=yes
+        actual_listing=$rs232_listing
+    fi
     has_rs232=no
     if [ "$actual_listing" = "$rs232_listing" ]; then
         has_rs232=yes
@@ -315,6 +321,12 @@ if [ "$mode" != --check ]; then
         exit 5
     fi
 
+    if [ "$has_containers" = yes ] &&
+        { [ ! -f "$stage/$package/router-containers.sh" ] || [ -L "$stage/$package/router-containers.sh" ]; }; then
+        echo 'Invalid optional containers installer.' >&2
+        exit 5
+    fi
+
     prefix=/opt/debian-router-b5-2840
     release_dir=$prefix/releases/$package_version
     service=/etc/systemd/system/debian-router-api.service
@@ -415,6 +427,12 @@ if [ "$mode" != --check ]; then
                 fi
             done
         fi
+        if [ "$has_containers" = yes ] &&
+            { [ ! -f "$release_dir/router-containers.sh" ] || [ -L "$release_dir/router-containers.sh" ] ||
+                ! cmp -s "$stage/$package/router-containers.sh" "$release_dir/router-containers.sh"; }; then
+            echo 'Installed optional containers installer differs from the verified release.' >&2
+            exit 6
+        fi
         if [ "$has_rs232" = yes ] &&
             { [ ! -f "$release_dir/router-rs232" ] || [ -L "$release_dir/router-rs232" ] ||
                 ! cmp -s "$stage/$package/router-rs232" "$release_dir/router-rs232"; }; then
@@ -496,6 +514,9 @@ if [ "$mode" != --check ]; then
         fi
         if [ "$has_rs232" = yes ]; then
             install -m 0755 "$stage/$package/router-rs232" "$release_tmp/"
+        fi
+        if [ "$has_containers" = yes ]; then
+            install -m 0755 "$stage/$package/router-containers.sh" "$release_tmp/"
         fi
         if [ "$has_ui" = yes ]; then
             install -d -m 0755 "$release_tmp/web" "$release_tmp/web/assets"

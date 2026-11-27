@@ -54,6 +54,7 @@ install -m 0644 "$repo/system/debian-router-failover.service" "$stage/$package/"
 install -m 0644 "$repo/system/debian-router-recovery.service" "$stage/$package/"
 install -m 0644 "$repo/system/debian-router-mqtt.service" "$stage/$package/"
 install -m 0644 "$repo/system/debian-router-ddns.service" "$stage/$package/"
+install -m 0755 "$repo/scripts/router-containers.sh" "$stage/$package/"
 mkdir -p "$stage/$package/web/assets"
 install -m 0644 "$ui_dist/index.html" "$stage/$package/web/index.html"
 install -m 0644 "$ui_dist/assets/app.js" "$stage/$package/web/assets/app.js"
@@ -96,6 +97,7 @@ expected_listing=$(printf '%s\n' "$package/" "$package/VERSION" "$package/PPPOE_
     "$package/router-mqtt" "$package/debian-router-mqtt.service" \
     "$package/router-ddns" "$package/debian-router-ddns.service" \
     "$package/router-rs232" \
+    "$package/router-containers.sh" \
     "$package/web/" "$package/web/assets/" "$package/web/assets/app.css" \
     "$package/web/assets/app.js" "$package/web/index.html" | sort)
 if [ "$(tar -tzf "$stage/$package.tar.gz" | sort)" != "$expected_listing" ]; then
