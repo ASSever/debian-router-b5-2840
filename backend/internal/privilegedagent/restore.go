@@ -70,7 +70,8 @@ func runRestoreWorker(operation string, request RestoreRequest) (bool, error) {
 	command := exec.CommandContext(ctx, "/usr/bin/systemd-run", "--system", "--quiet", "--wait", "--pipe", "--collect",
 		"--property=Type=exec", "--property=RuntimeMaxSec=17s", "--property=NoNewPrivileges=yes",
 		"--property=CapabilityBoundingSet=CAP_CHOWN", "--property=ProtectSystem=strict",
-		"--property=ProtectHome=yes", "--property=ReadWritePaths=/etc /var/lib/debian-router-agent /run/lock",
+		"--property=ProtectHome=yes", "--property=PrivateTmp=yes",
+		"--property=ReadWritePaths=/etc /var/lib/debian-router-agent /run/lock",
 		"--property=RestrictAddressFamilies=AF_UNIX", "--", "/usr/bin/flock", "--nonblock",
 		"/run/lock/debian-router-install.lock", executable, "restore-worker", operation)
 	command.Stdin = bytes.NewReader(data)
