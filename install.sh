@@ -1081,7 +1081,19 @@ EOF
         fi
     fi
 
+    restart_rollback_service() {
+        # The failed candidate can consume the same unit's start burst.
+        systemctl reset-failed "$1" || :
+        if systemctl restart "$1" &&
+            { sleep 1; systemctl is-active --quiet "$1"; }; then
+            return 0
+        fi
+        printf 'Automatic rollback could not restart %s.\n' "$1" >&2
+        return 1
+    }
+
     rollback_install() {
+        rollback_runtime_failed=no
         rollback_optional_service "$ddns_unit"
         rollback_optional_service "$mqtt_unit"
         rollback_optional_service "$recovery_unit"
@@ -1181,7 +1193,7 @@ EOF
                 systemctl disable debian-router-agent.service || :
             fi
             if [ "$agent_was_active" = yes ]; then
-                systemctl restart debian-router-agent.service || :
+                restart_rollback_service debian-router-agent.service || rollback_runtime_failed=yes
             else
                 systemctl stop debian-router-agent.service || :
             fi
@@ -1191,9 +1203,13 @@ EOF
             systemctl daemon-reload || :
         fi
         if [ -n "$previous_release" ]; then
-            systemctl restart debian-router-api.service || :
+            restart_rollback_service debian-router-api.service || rollback_runtime_failed=yes
         else
             systemctl disable --now debian-router-api.service || :
+        fi
+        if [ "$rollback_runtime_failed" = yes ]; then
+            echo 'Automatic rollback is incomplete. Check the previous release services from the console.' >&2
+            exit 7
         fi
     }
 
