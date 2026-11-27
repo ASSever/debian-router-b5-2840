@@ -34,6 +34,11 @@ func exchange(ctx context.Context, path string, speed uint32, tx, rx []byte) (re
 		return fmt.Errorf("configure port: %w", err)
 	}
 	defer func() {
+		if result != nil {
+			if err := unix.IoctlSetInt(fd, unix.TCFLSH, unix.TCIOFLUSH); err != nil {
+				result = errors.Join(result, fmt.Errorf("clear port queues after failed exchange: %w", err))
+			}
+		}
 		if err := unix.IoctlSetTermios(fd, unix.TCSETS, original); err != nil {
 			result = errors.Join(result, fmt.Errorf("restore port settings: %w", err))
 		}
@@ -41,10 +46,16 @@ func exchange(ctx context.Context, path string, speed uint32, tx, rx []byte) (re
 	if err := unix.IoctlSetInt(fd, unix.TCFLSH, unix.TCIOFLUSH); err != nil {
 		return fmt.Errorf("clear port queues: %w", err)
 	}
+	if err := unix.IoctlSetInt(fd, unix.TCXONC, unix.TCOON); err != nil {
+		return fmt.Errorf("resume port output: %w", err)
+	}
 	if err := transfer(ctx, fd, unix.POLLOUT, tx, unix.Write); err != nil {
 		return fmt.Errorf("send: %w", err)
 	}
-	return transfer(ctx, fd, unix.POLLIN, rx, unix.Read)
+	if err := transfer(ctx, fd, unix.POLLIN, rx, unix.Read); err != nil {
+		return fmt.Errorf("receive: %w", err)
+	}
+	return nil
 }
 
 func transfer(ctx context.Context, fd int, event int16, data []byte, io func(int, []byte) (int, error)) error {
