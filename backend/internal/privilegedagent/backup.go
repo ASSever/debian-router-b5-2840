@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 )
 
 const MaxBackupConfigBytes = 8 << 20
@@ -39,6 +40,34 @@ var backupPaths = []string{
 var proxyBackupGeneration = regexp.MustCompile(`^(initial|generation-[0-9]+)$`)
 var zapretBackupGeneration = regexp.MustCompile(`^profile\.[[:alnum:]]{8}$`)
 
+const proxyBackupDir = "var/lib/debian-router-agent/proxy-routing"
+const zapretBackupDir = "etc/debian-router-b5-2840/zapret"
+const APIBackupSubscription = "api/proxy-subscription.json"
+
+var backupProfiles = []struct {
+	dir, link string
+	pattern   *regexp.Regexp
+	names     []string
+}{
+	{proxyBackupDir, "active", proxyBackupGeneration, []string{"config.json", "profile.json"}},
+	{zapretBackupDir, "current", zapretBackupGeneration, []string{"profile", "exclude-hosts.txt"}},
+}
+
+// IsBackupConfig recognizes the logical paths emitted in version 1 archives.
+func IsBackupConfig(name string) bool {
+	if name == APIBackupSubscription || slices.Contains(backupPaths, name) {
+		return true
+	}
+	for _, profile := range backupProfiles {
+		for _, file := range profile.names {
+			if name == profile.dir+"/"+profile.link+"/"+file {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func readBackupConfigs(rootPath string) ([]BackupConfig, error) {
 	root, err := os.OpenRoot(rootPath)
 	if err != nil {
@@ -64,14 +93,7 @@ func readBackupConfigs(rootPath string) ([]BackupConfig, error) {
 			return nil, err
 		}
 	}
-	for _, profile := range []struct {
-		dir, link string
-		pattern   *regexp.Regexp
-		names     []string
-	}{
-		{"var/lib/debian-router-agent/proxy-routing", "active", proxyBackupGeneration, []string{"config.json", "profile.json"}},
-		{"etc/debian-router-b5-2840/zapret", "current", zapretBackupGeneration, []string{"profile", "exclude-hosts.txt"}},
-	} {
+	for _, profile := range backupProfiles {
 		path := filepath.Join(rootPath, profile.dir, profile.link)
 		target, err := os.Readlink(path)
 		if errors.Is(err, os.ErrNotExist) {

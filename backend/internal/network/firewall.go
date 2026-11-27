@@ -669,6 +669,9 @@ func (m *StaticWANManager) MaintainFirewall(ctx context.Context) {
 	for {
 		task, cancel := context.WithTimeout(ctx, 12*time.Second)
 		err := withFileLock(wanLockPath(m.statePath), func() error {
+			if RestoredNetworkHeld() {
+				return nil
+			}
 			state, err := m.readFirewall()
 			if err != nil || state == nil {
 				return err
