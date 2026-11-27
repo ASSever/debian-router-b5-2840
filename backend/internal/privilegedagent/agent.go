@@ -43,7 +43,7 @@ type Request struct {
 
 // Response contains harmless status data or a stable error code.
 type Response struct {
-	ServiceStates        []ServiceState                         `json:"service_states,omitempty"`
+	ServiceStates        *[]ServiceState                        `json:"service_states,omitempty"`
 	Traffic              *networkinventory.TrafficSnapshot      `json:"traffic,omitempty"`
 	ProxyProfile         *proxy.Profile                         `json:"proxy_profile,omitempty"`
 	WANProbeState        *networkinventory.WANProbeState        `json:"wan_probe_state,omitempty"`
@@ -436,7 +436,8 @@ func handleConnectionWithAllOperations(
 		if request.Operation == "service-status" {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			writeResponse(connection, Response{ServiceStates: readServiceStates(ctx)})
+			states := readServiceStates(ctx)
+			writeResponse(connection, Response{ServiceStates: &states})
 			return
 		}
 		writeResponse(connection, Response{Status: "ok", Agent: "ready"})

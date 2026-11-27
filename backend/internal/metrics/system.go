@@ -159,8 +159,8 @@ func readSystem(ctx context.Context, dir, socket string, previous *cpuCounters) 
 			system.LAN = activeLink(link)
 		}
 	}
-	if response, err := privilegedagent.SendRequest(ctx, socket, "service-status"); err == nil && len(response.ServiceStates) != 0 {
-		system.Services = response.ServiceStates
+	if response, err := privilegedagent.SendRequest(ctx, socket, "service-status"); err == nil && response.ServiceStates != nil {
+		system.Services = *response.ServiceStates
 	}
 	if ctx.Err() == nil {
 		if response, err := privilegedagent.SendRequest(ctx, socket, "wan-probe-state"); err == nil && response.WANProbeState != nil {
