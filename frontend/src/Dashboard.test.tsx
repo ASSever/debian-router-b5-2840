@@ -11,7 +11,49 @@ import Dashboard from "./Dashboard";
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+it("offers a report download after administrator access and retries an error", async () => {
+  const fetcher = vi
+    .fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ points: [] })))
+    .mockResolvedValueOnce(new Response(null, { status: 503 }))
+    .mockResolvedValueOnce(new Response('{"events":[]}'));
+  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal(
+    "URL",
+    Object.assign(class extends URL {}, {
+      createObjectURL: () => "blob:report",
+      revokeObjectURL: vi.fn(),
+    }),
+  );
+  const download = vi.fn();
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+    this: HTMLAnchorElement,
+  ) {
+    download(this.download, this.href);
+  });
+
+  render(<Dashboard />);
+  expect(screen.queryByText("Download failure report")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Open dashboard" }));
+  const button = await screen.findByRole("button", {
+    name: "Download failure report",
+  });
+  fireEvent.click(button);
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "The failure report could not be downloaded.",
+  );
+  expect(download).not.toHaveBeenCalled();
+  fireEvent.click(button);
+  await screen.findByRole("button", { name: "Download failure report" });
+  expect(fetcher.mock.calls[2][0]).toBe("/api/diagnostics/report");
+  expect(download).toHaveBeenCalledWith(
+    "router-failure-report.json",
+    "blob:report",
+  );
 });
 
 it("renders stored rates, blanks missing values and identifies stale measurements", async () => {
