@@ -29,7 +29,7 @@ jobs:
       - name: Check Go formatting
         working-directory: backend
         run: |
-          unformatted=$(gofmt -l cmd/router-api/*.go cmd/router-agent/*.go cmd/router-monitor/*.go cmd/router-failover/*.go cmd/router-recovery/*.go cmd/router-mqtt/*.go internal/network/*.go internal/privilegedagent/*.go internal/proxy/*.go internal/monitor/*.go internal/metrics/*.go internal/mqtt/*.go internal/hostmetrics/*.go internal/admin/admin.go internal/admin/admin_test.go internal/authsession/*.go internal/database/database.go internal/database/database_test.go)
+          unformatted=$(gofmt -l cmd/router-api/*.go cmd/router-agent/*.go cmd/router-monitor/*.go cmd/router-failover/*.go cmd/router-recovery/*.go cmd/router-mqtt/*.go cmd/router-ddns/*.go internal/network/*.go internal/privilegedagent/*.go internal/proxy/*.go internal/monitor/*.go internal/metrics/*.go internal/mqtt/*.go internal/ddns/*.go internal/hostmetrics/*.go internal/admin/admin.go internal/admin/admin_test.go internal/authsession/*.go internal/database/database.go internal/database/database_test.go)
           if [ -n "$unformatted" ]; then
             printf 'Go files need gofmt:\n%s\n' "$unformatted"
             gofmt -d $unformatted

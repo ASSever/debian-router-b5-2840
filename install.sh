@@ -131,7 +131,14 @@ if [ "$mode" != --check ]; then
         "$package/debian-router-recovery.service" | sort)
     mqtt_listing=$(printf '%s\n' "$recovery_listing" "$package/router-mqtt" \
         "$package/debian-router-mqtt.service" | sort)
+    ddns_listing=$(printf '%s\n' "$mqtt_listing" "$package/router-ddns" \
+        "$package/debian-router-ddns.service" | sort)
     actual_listing=$(tar -tzf "$stage/$archive" | sort)
+    has_ddns=no
+    if [ "$actual_listing" = "$ddns_listing" ]; then
+        has_ddns=yes
+        actual_listing=$mqtt_listing
+    fi
     has_mqtt=no
     if [ "$actual_listing" = "$mqtt_listing" ]; then
         has_mqtt=yes
@@ -277,6 +284,16 @@ if [ "$mode" != --check ]; then
 
     mqtt_unit=debian-router-mqtt.service
     mqtt_files="router-mqtt $mqtt_unit"
+    ddns_unit=debian-router-ddns.service
+    ddns_files="router-ddns $ddns_unit"
+    if [ "$has_ddns" = yes ]; then
+        for payload in $ddns_files; do
+            if [ ! -f "$stage/$package/$payload" ] || [ -L "$stage/$package/$payload" ]; then
+                echo 'Invalid DDNS payload.' >&2
+                exit 5
+            fi
+        done
+    fi
     if [ "$has_mqtt" = yes ]; then
         for payload in $mqtt_files; do
             if [ ! -f "$stage/$package/$payload" ] || [ -L "$stage/$package/$payload" ]; then
@@ -386,6 +403,15 @@ if [ "$mode" != --check ]; then
                 fi
             done
         fi
+        if [ "$has_ddns" = yes ]; then
+            for payload in $ddns_files; do
+                if [ ! -f "$release_dir/$payload" ] || [ -L "$release_dir/$payload" ] ||
+                    ! cmp -s "$stage/$package/$payload" "$release_dir/$payload"; then
+                    echo 'Installed DDNS files differ from the verified release.' >&2
+                    exit 6
+                fi
+            done
+        fi
         if [ "$has_mqtt" = yes ]; then
             for payload in $mqtt_files; do
                 if [ ! -f "$release_dir/$payload" ] || [ -L "$release_dir/$payload" ] ||
@@ -445,6 +471,10 @@ if [ "$mode" != --check ]; then
         if [ "$has_mqtt" = yes ]; then
             install -m 0755 "$stage/$package/router-mqtt" "$release_tmp/"
             install -m 0644 "$stage/$package/$mqtt_unit" "$release_tmp/"
+        fi
+        if [ "$has_ddns" = yes ]; then
+            install -m 0755 "$stage/$package/router-ddns" "$release_tmp/"
+            install -m 0644 "$stage/$package/$ddns_unit" "$release_tmp/"
         fi
         if [ "$has_ui" = yes ]; then
             install -d -m 0755 "$release_tmp/web" "$release_tmp/web/assets"
@@ -813,6 +843,7 @@ EOF
     prepare_optional_service "$has_failover" "$failover_unit" router-failover /etc/debian-router-b5-2840/failover.json || exit 7
     prepare_optional_service "$has_recovery" "$recovery_unit" router-recovery /etc/debian-router-b5-2840/recovery.json || exit 7
     prepare_optional_service "$has_mqtt" "$mqtt_unit" router-mqtt /etc/debian-router-b5-2840/mqtt.json || exit 7
+    prepare_optional_service "$has_ddns" "$ddns_unit" router-ddns /etc/debian-router-b5-2840/ddns.json || exit 7
 
     activate_optional_service() {
         optional_unit=$2
@@ -1009,6 +1040,7 @@ EOF
     fi
 
     rollback_install() {
+        rollback_optional_service "$ddns_unit"
         rollback_optional_service "$mqtt_unit"
         rollback_optional_service "$recovery_unit"
         rollback_optional_service "$failover_unit"
@@ -1217,14 +1249,16 @@ EOF
     if [ "$has_monitor" = yes ]; then printf 'Monitor service: %s\n' "$monitor_unit"; fi
     if ! activate_optional_service "$has_failover" "$failover_unit" ||
         ! activate_optional_service "$has_recovery" "$recovery_unit" ||
-        ! activate_optional_service "$has_mqtt" "$mqtt_unit"; then
+        ! activate_optional_service "$has_mqtt" "$mqtt_unit" ||
+        ! activate_optional_service "$has_ddns" "$ddns_unit"; then
         rollback_install
-        echo 'Could not update the optional proxy services; the previous release was restored.' >&2
+        echo 'Could not update the optional services; the previous release was restored.' >&2
         exit 7
     fi
     if [ "$has_failover" = yes ]; then printf 'Failover service: %s\n' "$failover_unit"; fi
     if [ "$has_recovery" = yes ]; then printf 'Recovery service: %s\n' "$recovery_unit"; fi
     if [ "$has_mqtt" = yes ]; then printf 'MQTT service: %s\n' "$mqtt_unit"; fi
+    if [ "$has_ddns" = yes ]; then printf 'DDNS service: %s\n' "$ddns_unit"; fi
     printf 'Installed API release: %s\n' "$package_version"
     if [ "$has_agent" = yes ]; then
         printf 'Privileged agent: active, socket %s\n' '/run/debian-router-agent/agent.sock'
