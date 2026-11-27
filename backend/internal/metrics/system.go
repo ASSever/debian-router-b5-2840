@@ -4,7 +4,6 @@ import (
 	"context"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -23,59 +22,18 @@ type Link struct {
 	Addresses []string `json:"addresses"`
 }
 
-type Service struct {
-	Unit  string `json:"unit"`
-	State string `json:"state"`
-}
-
 type System struct {
-	CPU         *float64  `json:"cpu_percent"`
-	Temperature *float64  `json:"temperature_c"`
-	Memory      *Space    `json:"memory"`
-	Disk        *Space    `json:"disk"`
-	Uptime      *float64  `json:"uptime_seconds"`
-	WAN         *Link     `json:"wan"`
-	LAN         *Link     `json:"lan"`
-	WANGateway  *string   `json:"wan_gateway"`
-	WANDNS      []string  `json:"wan_dns"`
-	Firewall    *bool     `json:"firewall_enabled"`
-	Services    []Service `json:"services"`
-}
-
-var units = []string{
-	"debian-router-api.service", "debian-router-agent.service", "systemd-networkd.service",
-	"debian-router-lan-dnsmasq.service", "debian-router-sing-box.service", "debian-router-zapret.service",
-	"debian-router-monitor.service", "debian-router-failover.service", "debian-router-recovery.service",
-}
-
-func serviceStates(ctx context.Context) []Service {
-	args := append([]string{"show", "--property=Id,LoadState,ActiveState", "--"}, units...)
-	// systemctl may exit nonzero for a missing unit while returning other units.
-	output, _ := exec.CommandContext(ctx, "/usr/bin/systemctl", args...).Output()
-	states := make(map[string]string, len(units))
-	for _, block := range strings.Split(strings.TrimSpace(string(output)), "\n\n") {
-		properties := map[string]string{}
-		for _, line := range strings.Split(block, "\n") {
-			key, value, ok := strings.Cut(line, "=")
-			if ok {
-				properties[key] = value
-			}
-		}
-		state := properties["ActiveState"]
-		if properties["LoadState"] == "not-found" {
-			state = "not_loaded"
-		}
-		states[properties["Id"]] = state
-	}
-	services := make([]Service, 0, len(units))
-	for _, unit := range units {
-		state := states[unit]
-		if state == "" {
-			state = "unavailable"
-		}
-		services = append(services, Service{Unit: unit, State: state})
-	}
-	return services
+	CPU         *float64                       `json:"cpu_percent"`
+	Temperature *float64                       `json:"temperature_c"`
+	Memory      *Space                         `json:"memory"`
+	Disk        *Space                         `json:"disk"`
+	Uptime      *float64                       `json:"uptime_seconds"`
+	WAN         *Link                          `json:"wan"`
+	LAN         *Link                          `json:"lan"`
+	WANGateway  *string                        `json:"wan_gateway"`
+	WANDNS      []string                       `json:"wan_dns"`
+	Firewall    *bool                          `json:"firewall_enabled"`
+	Services    []privilegedagent.ServiceState `json:"services"`
 }
 
 type cpuCounters struct {
@@ -190,7 +148,7 @@ func readSystem(ctx context.Context, dir, socket string, previous *cpuCounters) 
 	current := cpuSnapshot()
 	system := System{
 		CPU: cpuUsage(previous, current), Temperature: temperature(), Memory: memory(), Disk: diskSpace(dir),
-		Uptime: firstNumber("/proc/uptime"), Services: serviceStates(ctx),
+		Uptime: firstNumber("/proc/uptime"), Services: privilegedagent.UnavailableServiceStates(),
 	}
 	links, _ := network.ReadInterfaces()
 	for _, link := range links {
@@ -200,6 +158,9 @@ func readSystem(ctx context.Context, dir, socket string, previous *cpuCounters) 
 		case network.LANInterface:
 			system.LAN = activeLink(link)
 		}
+	}
+	if response, err := privilegedagent.SendRequest(ctx, socket, "service-status"); err == nil && response.ServiceStates != nil {
+		system.Services = *response.ServiceStates
 	}
 	if ctx.Err() == nil {
 		if response, err := privilegedagent.SendRequest(ctx, socket, "wan-probe-state"); err == nil && response.WANProbeState != nil {

@@ -1,0 +1,53 @@
+package privilegedagent
+
+import (
+	"context"
+	"os/exec"
+	"strings"
+)
+
+type ServiceState struct {
+	Unit  string `json:"unit"`
+	State string `json:"state"`
+}
+
+var dashboardUnits = []string{
+	"debian-router-api.service", "debian-router-agent.service", "systemd-networkd.service",
+	"debian-router-lan-dnsmasq.service", "debian-router-sing-box.service", "debian-router-zapret.service",
+	"debian-router-monitor.service", "debian-router-failover.service", "debian-router-recovery.service",
+}
+
+func readServiceStates(ctx context.Context) []ServiceState {
+	args := append([]string{"--system", "--no-pager", "show", "--property=Id,LoadState,ActiveState", "--"}, dashboardUnits...)
+	// A missing unit can produce a nonzero exit status alongside valid properties.
+	output, _ := exec.CommandContext(ctx, "/usr/bin/systemctl", args...).Output()
+	return parseServiceStates(string(output))
+}
+
+func parseServiceStates(output string) []ServiceState {
+	states := make(map[string]string, len(dashboardUnits))
+	for _, block := range strings.Split(strings.TrimSpace(output), "\n\n") {
+		properties := map[string]string{}
+		for _, line := range strings.Split(block, "\n") {
+			if key, value, ok := strings.Cut(line, "="); ok {
+				properties[key] = value
+			}
+		}
+		state := properties["ActiveState"]
+		if properties["LoadState"] == "not-found" {
+			state = "not_loaded"
+		}
+		states[properties["Id"]] = state
+	}
+	services := make([]ServiceState, 0, len(dashboardUnits))
+	for _, unit := range dashboardUnits {
+		state := states[unit]
+		if state == "" {
+			state = "unavailable"
+		}
+		services = append(services, ServiceState{Unit: unit, State: state})
+	}
+	return services
+}
+
+func UnavailableServiceStates() []ServiceState { return parseServiceStates("") }

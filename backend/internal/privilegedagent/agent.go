@@ -43,6 +43,7 @@ type Request struct {
 
 // Response contains harmless status data or a stable error code.
 type Response struct {
+	ServiceStates        *[]ServiceState                        `json:"service_states,omitempty"`
 	Traffic              *networkinventory.TrafficSnapshot      `json:"traffic,omitempty"`
 	ProxyProfile         *proxy.Profile                         `json:"proxy_profile,omitempty"`
 	WANProbeState        *networkinventory.WANProbeState        `json:"wan_probe_state,omitempty"`
@@ -427,9 +428,16 @@ func handleConnectionWithAllOperations(
 		defer cancel()
 		writeResponse(connection, handleLANRequest(ctx, manager, request))
 
-	case "status":
+	case "status", "service-status":
 		if request.Interface != "" || request.StaticWANConfig != nil || request.PPPoEConfig != nil || request.TransactionID != "" {
 			writeResponse(connection, Response{Error: "invalid_request"})
+			return
+		}
+		if request.Operation == "service-status" {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			states := readServiceStates(ctx)
+			writeResponse(connection, Response{ServiceStates: &states})
 			return
 		}
 		writeResponse(connection, Response{Status: "ok", Agent: "ready"})
