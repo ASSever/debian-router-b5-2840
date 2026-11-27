@@ -202,19 +202,67 @@ function DashboardContent() {
       )}
       {access === "signed-in" && (
         <>
-          <button
-            className="refresh-button"
-            type="button"
-            disabled={busy}
-            onClick={() => void signOut()}
-          >
-            Sign out
-          </button>
+          <div className="dashboard-actions">
+            <FailureReport />
+            <button
+              className="refresh-button"
+              type="button"
+              disabled={busy}
+              onClick={() => void signOut()}
+            >
+              Sign out
+            </button>
+          </div>
           {history && (
             <Measurements history={history} disconnected={Boolean(error)} />
           )}
         </>
       )}
+    </div>
+  );
+}
+
+function FailureReport() {
+  const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState("");
+
+  const download = async () => {
+    setDownloading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/diagnostics/report", {
+        cache: "no-store",
+        signal: AbortSignal.timeout(25_000),
+      });
+      if (response.status === 401 || response.status === 403) {
+        setError("Sign in as administrator to download the report.");
+        return;
+      }
+      if (!response.ok) throw new Error("Report unavailable");
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "router-failure-report.json";
+      link.click();
+      window.setTimeout(URL.revokeObjectURL, 1000, url);
+    } catch {
+      setError("The failure report could not be downloaded. Try again.");
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <div>
+      <button
+        className="refresh-button"
+        type="button"
+        disabled={downloading}
+        onClick={() => void download()}
+      >
+        {downloading ? "Preparing report…" : "Download failure report"}
+      </button>
+      {error && <p role="alert">{error}</p>}
     </div>
   );
 }

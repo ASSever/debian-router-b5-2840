@@ -11,6 +11,10 @@ Id=debian-router-lan-dnsmasq.service
 LoadState=not-found
 ActiveState=inactive
 
+Id=debian-router-agent.service
+LoadState=loaded
+ActiveState=unexpected
+
 Id=unrelated.service
 LoadState=loaded
 ActiveState=failed

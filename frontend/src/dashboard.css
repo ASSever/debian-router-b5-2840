@@ -25,6 +25,13 @@
   border-top: 1px solid var(--color-line);
 }
 
+.dashboard-actions {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
 .dashboard-login {
   display: grid;
   max-width: 24rem;
