@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import StaticWANPanel from "./StaticWANPanel";
+import Dashboard from "./Dashboard";
 import PPPoEPanel from "./PPPoEPanel";
 import WANDiagnosticPanel from "./WANDiagnosticPanel";
 
@@ -247,6 +248,7 @@ export default function App() {
           </div>
         </section>
 
+        <Dashboard />
         <NetworkPortWizard />
 
         <StaticWANPanel />

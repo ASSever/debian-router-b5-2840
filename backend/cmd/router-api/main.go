@@ -14,6 +14,7 @@ import (
 
 	"github.com/ASSever/debian-router-b5-2840/backend/internal/admin"
 	"github.com/ASSever/debian-router-b5-2840/backend/internal/database"
+	"github.com/ASSever/debian-router-b5-2840/backend/internal/metrics"
 )
 
 const listenAddress = "127.0.0.1:8081"
@@ -47,15 +48,32 @@ func main() {
 		log.Fatalf("prepare HTTPS: %v", err)
 	}
 
+	stop, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	initCtx, finishInit := context.WithTimeout(stop, 5*time.Second)
+	history, err := metrics.Open(initCtx, filepath.Join(dataDir, "metrics.db"))
+	finishInit()
+	if err != nil {
+		log.Printf("open metrics history: %v", err)
+	} else {
+		collectorDone := make(chan struct{})
+		go func() {
+			defer close(collectorDone)
+			metrics.Collect(stop, history, agentSocketPath(), dataDir)
+		}()
+		defer func() {
+			cancel()
+			<-collectorDone
+			history.Close()
+		}()
+	}
 	server := &http.Server{
 		Addr:              listenAddress,
-		Handler:           newAPI(db),
+		Handler:           withDashboard(newAPI(db), db, history),
 		ReadHeaderTimeout: 5 * time.Second,
 		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12},
 	}
 
-	stop, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
 	if os.Getenv("ROUTER_LAN_HTTPS") == "yes" {
 		if err := serveLAN(stop, dataDir, server.Handler); err != nil {
 			log.Printf("LAN HTTPS unavailable: %v", err)
