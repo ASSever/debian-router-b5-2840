@@ -80,6 +80,9 @@ install -m 0644 "$ui_dist/assets/app.css" "$stage/$package/web/assets/app.css"
 (cd "$repo/backend" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
     go build -trimpath -buildvcs=false -ldflags=-buildid= \
     -o "$stage/$package/router-ddns" ./cmd/router-ddns)
+(cd "$repo/backend" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+    go build -trimpath -buildvcs=false -ldflags=-buildid= \
+    -o "$stage/$package/router-rs232" ./cmd/router-rs232)
 
 tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
     -C "$stage" -cf "$stage/$package.tar" "$package"
@@ -92,6 +95,7 @@ expected_listing=$(printf '%s\n' "$package/" "$package/VERSION" "$package/PPPOE_
     "$package/router-recovery" "$package/debian-router-recovery.service" \
     "$package/router-mqtt" "$package/debian-router-mqtt.service" \
     "$package/router-ddns" "$package/debian-router-ddns.service" \
+    "$package/router-rs232" \
     "$package/web/" "$package/web/assets/" "$package/web/assets/app.css" \
     "$package/web/assets/app.js" "$package/web/index.html" | sort)
 if [ "$(tar -tzf "$stage/$package.tar.gz" | sort)" != "$expected_listing" ]; then
