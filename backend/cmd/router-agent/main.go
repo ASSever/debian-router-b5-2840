@@ -24,6 +24,9 @@ func main() {
 }
 
 func run(arguments []string) error {
+	if len(arguments) == 2 && arguments[0] == "restore-worker" {
+		return privilegedagent.RestoreWorker(arguments[1], os.Stdin, os.Stdout)
+	}
 	socketPath := os.Getenv("ROUTER_AGENT_SOCKET")
 	if socketPath == "" {
 		socketPath = privilegedagent.DefaultSocketPath()

@@ -118,6 +118,7 @@ func newAPIWithNetworkOperations(
 	mux.HandleFunc("GET /healthz", health)
 	mux.HandleFunc("GET /api/diagnostics/report", a.diagnosticReport(readAgentDiagnostics))
 	mux.HandleFunc("POST /api/backup", a.backupDownload())
+	mux.HandleFunc("POST "+restoreRoute, a.restoreDownload)
 	mux.HandleFunc("GET /api/network/interfaces", a.networkInterfaces)
 	mux.HandleFunc("GET /api/network/dhcp", a.networkDHCPStatus)
 	mux.HandleFunc("POST /api/network/wan/static", a.applyStaticWANSettings)
@@ -165,7 +166,7 @@ func newAPIWithNetworkOperations(
 	ui := newUIHandler(uiDirectory)
 	mux.Handle("GET /{$}", ui)
 	mux.Handle("GET /assets/", ui)
-	return requireHTTPS(securityHeaders(mux))
+	return requireHTTPS(securityHeaders(guardRestore(mux)))
 }
 
 func applyStaticWANToAgent(ctx context.Context, config networkinventory.StaticWANConfig) (networkinventory.StaticWANTransaction, error) {

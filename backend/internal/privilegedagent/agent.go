@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strings"
 	"syscall"
 	"time"
 
@@ -26,6 +27,7 @@ const (
 
 // Request is the only message accepted by the privileged agent.
 type Request struct {
+	Restore           *RestoreRequest                     `json:"restore,omitempty"`
 	ProxyProfile      *proxy.ProfileChange                `json:"proxy_profile,omitempty"`
 	RoutingConfig     *networkinventory.RoutingConfig     `json:"routing_config,omitempty"`
 	FirewallRules     *networkinventory.FirewallRules     `json:"firewall_rules,omitempty"`
@@ -43,6 +45,7 @@ type Request struct {
 
 // Response carries operation-specific data. BackupConfigs can contain private credentials.
 type Response struct {
+	RestoreNetwork       bool                                   `json:"restore_network,omitempty"`
 	BackupConfigs        *[]BackupConfig                        `json:"backup_configs,omitempty"`
 	Diagnostic           *DiagnosticSnapshot                    `json:"diagnostic,omitempty"`
 	ServiceStates        *[]ServiceState                        `json:"service_states,omitempty"`
@@ -96,8 +99,10 @@ func Serve(ctx context.Context, socketPath string, allowedGID uint32) error {
 	if err := manager.RecoverPending(ctx); err != nil {
 		return fmt.Errorf("recover pending WAN configuration: %w", err)
 	}
-	if err := manager.RecoverLAN(ctx); err != nil {
-		log.Printf("restore LAN services: %v", err)
+	if !networkinventory.RestoredNetworkHeld() {
+		if err := manager.RecoverLAN(ctx); err != nil {
+			log.Printf("restore LAN services: %v", err)
+		}
 	}
 	pppoe, err := networkinventory.NewPPPoEManager()
 	if err != nil {
@@ -370,6 +375,14 @@ func handleConnectionWithAllOperations(
 	request, err := decodeRequest(connection)
 	if err != nil {
 		writeResponse(connection, Response{Error: "invalid_request"})
+		return
+	}
+	if strings.HasPrefix(request.Operation, "restore-") || request.Restore != nil {
+		writeResponse(connection, handleRestoreRequest(request))
+		return
+	}
+	if networkWriteOperation(request.Operation) && networkinventory.RestoredNetworkHeld() {
+		writeResponse(connection, Response{Error: "restored_network_pending"})
 		return
 	}
 	if request.WANLineConfig != nil && request.Operation != "wan-line-apply" {
@@ -659,8 +672,8 @@ func validTransactionID(id string) bool {
 }
 
 func decodeRequest(reader io.Reader) (Request, error) {
-	payload, err := io.ReadAll(io.LimitReader(reader, maxRequestBytes+1))
-	if err != nil || len(payload) == 0 || len(payload) > maxRequestBytes || payload[len(payload)-1] != '\n' {
+	payload, err := io.ReadAll(io.LimitReader(reader, restoreWireLimit+1))
+	if err != nil || len(payload) == 0 || len(payload) > restoreWireLimit || payload[len(payload)-1] != '\n' {
 		return Request{}, errors.New("request is incomplete or too large")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(payload))
@@ -679,7 +692,40 @@ func decodeRequest(reader io.Reader) (Request, error) {
 	if request.Operation == "" {
 		return Request{}, errors.New("request operation is empty")
 	}
+	if len(payload) > maxRequestBytes && request.Operation != "restore-apply" {
+		return Request{}, errors.New("request is too large")
+	}
 	return request, nil
+}
+
+func handleRestoreRequest(request Request) Response {
+	payload := request.Restore
+	if payload == nil || !ValidRestoreID(payload.ID) {
+		return Response{Error: "invalid_request"}
+	}
+	op := request.Operation
+	request.Restore = nil
+	request.Operation = ""
+	if request != (Request{}) || (op != "restore-apply" && op != "restore-rollback" && op != "restore-finalize") ||
+		(op != "restore-apply" && len(payload.Configs) != 0) {
+		return Response{Error: "invalid_request"}
+	}
+	changed, err := runRestoreWorker(op, *payload)
+	if err != nil {
+		return Response{Error: "restore_config_failed"}
+	}
+	return Response{Status: "ok", RestoreNetwork: changed}
+}
+
+func networkWriteOperation(operation string) bool {
+	switch operation {
+	case "lan-apply", "lan-confirm", "reservation-change", "lan-dns-save", "lan-dns-clear",
+		"firewall-apply", "firewall-confirm", "firewall-rollback", "firewall-rules-apply",
+		"routing-apply", "wan-line-apply", "static-wan-apply", "static-wan-confirm", "static-wan-rollback",
+		"pppoe-apply", "pppoe-confirm", "pppoe-rollback", "pppoe-reconnect":
+		return true
+	}
+	return false
 }
 
 func writeResponse(writer io.Writer, response Response) {

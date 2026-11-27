@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 
+import RestoreBackup from "./RestoreBackup";
 import "./dashboard.css";
 
 type Rate = {
@@ -68,6 +69,7 @@ function DashboardContent() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
+  const [restoreStatus, setRestoreStatus] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -167,6 +169,7 @@ function DashboardContent() {
   return (
     <div className="dashboard-body">
       {error && <p role="alert">{error}</p>}
+      {restoreStatus && <p role="status">{restoreStatus}</p>}
       {access === "loading" && !error && (
         <p role="status">Loading measurements…</p>
       )}
@@ -227,6 +230,14 @@ function DashboardContent() {
               Sign out
             </button>
           </div>
+          <RestoreBackup
+            onRestored={(message) => {
+              setRestoreStatus(message);
+              setHistory(null);
+              setAccess("signed-out");
+              setRevision((value) => value + 1);
+            }}
+          />
           {history && (
             <Measurements history={history} disconnected={Boolean(error)} />
           )}

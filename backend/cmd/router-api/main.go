@@ -35,6 +35,12 @@ func main() {
 		}
 		return
 	}
+	recovery, finishRecovery := context.WithTimeout(context.Background(), 45*time.Second)
+	_, err = recoverRestore(recovery, db, dataDir)
+	finishRecovery()
+	if err != nil {
+		log.Fatal("pending backup restore recovery failed")
+	}
 	initialized, err := admin.Exists(context.Background(), db)
 	if err != nil {
 		log.Fatalf("read administrator state: %v", err)
