@@ -496,6 +496,22 @@ func (m *StaticWANManager) ensureStateDirectory() error {
 	return nil
 }
 
+// WithStableBackupConfig excludes tentative network settings and their rollback.
+func (m *StaticWANManager) WithStableBackupConfig(read func() error) error {
+	return withFileLock(wanLockPath(m.statePath), func() error {
+		for _, path := range []string{m.statePath, pppoeStatePath} {
+			pending, err := (&StaticWANManager{statePath: path}).hasPendingTransaction()
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			if pending {
+				return ErrStaticWANPending
+			}
+		}
+		return read()
+	})
+}
+
 func (m *StaticWANManager) hasPendingTransaction() (bool, error) {
 	entries, err := os.ReadDir(m.statePath)
 	if err != nil {

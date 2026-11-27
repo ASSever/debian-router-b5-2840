@@ -117,6 +117,7 @@ func newAPIWithNetworkOperations(
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", health)
 	mux.HandleFunc("GET /api/diagnostics/report", a.diagnosticReport(readAgentDiagnostics))
+	mux.HandleFunc("POST /api/backup", a.backupDownload())
 	mux.HandleFunc("GET /api/network/interfaces", a.networkInterfaces)
 	mux.HandleFunc("GET /api/network/dhcp", a.networkDHCPStatus)
 	mux.HandleFunc("POST /api/network/wan/static", a.applyStaticWANSettings)

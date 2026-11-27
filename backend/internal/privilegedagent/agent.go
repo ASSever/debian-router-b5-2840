@@ -41,8 +41,9 @@ type Request struct {
 	TransactionID     string                              `json:"transaction_id,omitempty"`
 }
 
-// Response contains harmless status data or a stable error code.
+// Response carries operation-specific data. BackupConfigs can contain private credentials.
 type Response struct {
+	BackupConfigs        *[]BackupConfig                        `json:"backup_configs,omitempty"`
 	Diagnostic           *DiagnosticSnapshot                    `json:"diagnostic,omitempty"`
 	ServiceStates        *[]ServiceState                        `json:"service_states,omitempty"`
 	Traffic              *networkinventory.TrafficSnapshot      `json:"traffic,omitempty"`
@@ -279,6 +280,9 @@ func sendRequest(ctx context.Context, socketPath string, request Request) (Respo
 	if request.Operation == "traffic-status" {
 		responseLimit = 1 << 20
 	}
+	if request.Operation == "backup-configs" {
+		responseLimit = 2 * MaxBackupConfigBytes
+	}
 	decoder := json.NewDecoder(io.LimitReader(connection, responseLimit))
 	decoder.DisallowUnknownFields()
 	var response Response
@@ -429,9 +433,28 @@ func handleConnectionWithAllOperations(
 		defer cancel()
 		writeResponse(connection, handleLANRequest(ctx, manager, request))
 
-	case "status", "service-status", "diagnostic-report":
+	case "status", "service-status", "diagnostic-report", "backup-configs":
 		if request.Interface != "" || request.StaticWANConfig != nil || request.PPPoEConfig != nil || request.TransactionID != "" {
 			writeResponse(connection, Response{Error: "invalid_request"})
+			return
+		}
+		if request.Operation == "backup-configs" {
+			manager, ok := staticWAN.(*networkinventory.StaticWANManager)
+			if !ok {
+				writeResponse(connection, Response{Error: "unsupported_operation"})
+				return
+			}
+			var configs []BackupConfig
+			err := manager.WithStableBackupConfig(func() error {
+				var readErr error
+				configs, readErr = readBackupConfigs("/")
+				return readErr
+			})
+			if err != nil {
+				writeResponse(connection, Response{Error: "backup_configs_unavailable"})
+				return
+			}
+			writeResponse(connection, Response{Status: "ok", BackupConfigs: &configs})
 			return
 		}
 		if request.Operation == "diagnostic-report" {
