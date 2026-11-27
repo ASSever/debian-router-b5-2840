@@ -77,7 +77,7 @@ func (a *api) backupDownload() http.HandlerFunc {
 
 func loadBackupConfigs(ctx context.Context) ([]privilegedagent.BackupConfig, error) {
 	response, err := privilegedagent.SendRequest(ctx, agentSocketPath(), "backup-configs")
-	if err != nil || response.Status != "ok" || response.Error != "" {
+	if err != nil || response.Status != "ok" || response.Error != "" || response.BackupConfigs == nil {
 		return nil, errors.New("router configs unavailable")
 	}
 	root, err := os.OpenRoot(proxyStateDirectory())
@@ -88,12 +88,12 @@ func loadBackupConfigs(ctx context.Context) ([]privilegedagent.BackupConfig, err
 	const subscription = "proxy-subscription.json"
 	data, err := privilegedagent.ReadBackupFile(root, subscription, privilegedagent.MaxBackupConfigBytes)
 	if errors.Is(err, os.ErrNotExist) {
-		return response.BackupConfigs, nil
+		return *response.BackupConfigs, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return append(response.BackupConfigs, privilegedagent.BackupConfig{
+	return append(*response.BackupConfigs, privilegedagent.BackupConfig{
 		Name: "api/" + subscription, Data: data,
 	}), nil
 }

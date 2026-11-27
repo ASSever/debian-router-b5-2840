@@ -43,7 +43,7 @@ type Request struct {
 
 // Response carries operation-specific data. BackupConfigs can contain private credentials.
 type Response struct {
-	BackupConfigs        []BackupConfig                         `json:"backup_configs,omitempty"`
+	BackupConfigs        *[]BackupConfig                        `json:"backup_configs,omitempty"`
 	Diagnostic           *DiagnosticSnapshot                    `json:"diagnostic,omitempty"`
 	ServiceStates        *[]ServiceState                        `json:"service_states,omitempty"`
 	Traffic              *networkinventory.TrafficSnapshot      `json:"traffic,omitempty"`
@@ -454,7 +454,7 @@ func handleConnectionWithAllOperations(
 				writeResponse(connection, Response{Error: "backup_configs_unavailable"})
 				return
 			}
-			writeResponse(connection, Response{Status: "ok", BackupConfigs: configs})
+			writeResponse(connection, Response{Status: "ok", BackupConfigs: &configs})
 			return
 		}
 		if request.Operation == "diagnostic-report" {
