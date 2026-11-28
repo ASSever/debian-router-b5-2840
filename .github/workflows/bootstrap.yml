@@ -11,3 +11,5 @@ jobs:
         run: sh tests/bootstrap.sh
       - name: Check entry point as an unprivileged user on minimal Debian 13
         run: docker run --rm --user 65534:65534 --read-only --network none -v "$PWD:/project:ro" -w /project debian:13-slim sh tests/bootstrap.sh
+      - name: Exercise removal in a disposable Debian 13 filesystem
+        run: docker run --rm --network none -v "$PWD:/project:ro" -w /project debian:13-slim sh tests/uninstall.sh
