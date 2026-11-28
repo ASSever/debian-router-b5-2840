@@ -20,6 +20,7 @@ expect_exit() {
 }
 expect_exit 2 sh install.sh --invalid
 expect_exit 2 sh install.sh --check extra
+expect_exit 2 sh install.sh --uninstall extra
 expect_exit 2 sh install.sh --fetch-version ../invalid
 expect_exit 2 sh install.sh --install-version ../invalid
 expect_exit 2 sh tests/network-rollback-fixture.sh
@@ -37,7 +38,9 @@ if [ "${ID-}/${VERSION_ID-}/$arch" = debian/13/amd64 ]; then
         printf '%s\n' "$report" | grep -F -- "$marker" >/dev/null
     done
     expect_exit 4 sh install.sh
+    expect_exit 4 sh install.sh --uninstall
 else
     expect_exit 3 sh install.sh
+    expect_exit 3 sh install.sh --uninstall
 fi
 echo 'Bootstrap checks passed.'

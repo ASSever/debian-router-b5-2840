@@ -4,12 +4,12 @@ set -eu
 export LC_ALL=C
 
 usage() {
-    printf '%s\n' 'Usage: sh install.sh [--check | --fetch-version VERSION | --install-version VERSION | --help]' \
-        'Install the latest verified API and UI release, or select a release explicitly.'
+    printf '%s\n' 'Usage: sh install.sh [--check | --fetch-version VERSION | --install-version VERSION | --uninstall | --help]' \
+        'Install, verify or remove the Debian Router application.'
 }
 
 case "$#:${1-}" in
-    0:|1:--check) ;;
+    0:|1:--check|1:--uninstall) ;;
     1:--help) usage; exit 0 ;;
     2:--fetch-version|2:--install-version) ;;
     *) usage >&2; exit 2 ;;
@@ -21,7 +21,7 @@ if [ "$mode" = --fetch-version ] || [ "$mode" = --install-version ]; then
 else
     release_version=latest
 fi
-if [ "$mode" != --check ]; then
+if [ "$mode" != --check ] && [ "$mode" != --uninstall ]; then
     if [ "$release_version" != latest ] && \
         ! printf '%s\n' "$release_version" | grep -Eq \
             '^[0-9]+\.[0-9]+\.[0-9]+-step[0-9]{2}-[0-9]{8}-[0-9]{4}-r[0-9]+$'; then
@@ -40,6 +40,95 @@ if [ "${ID-}/${VERSION_ID-}/$architecture" != debian/13/amd64 ]; then
     printf 'Unsupported platform: %s %s (%s). Debian 13 amd64 required.\n' \
         "${ID-unknown}" "${VERSION_ID-unknown}" "$architecture" >&2
     exit 3
+fi
+
+uninstall_router() {
+    if [ "$(id -u)" -ne 0 ]; then
+        echo 'Run the removal as root: sudo sh ./install.sh --uninstall' >&2
+        exit 4
+    fi
+    exec 9>/run/lock/debian-router-install.lock
+    flock -x 9
+
+    prefix=/opt/debian-router-b5-2840
+    units_dir=/etc/systemd/system
+    if [ -L "$prefix" ]; then
+        echo "Refusing to remove activation links in a symbolic installation directory: $prefix" >&2
+        exit 6
+    fi
+    for link in "$prefix/current" "$prefix/agent-current"; do
+        if [ -L "$link" ]; then
+            case "$(readlink "$link")" in
+                "$prefix"/releases/*|"$prefix"/debian-router-b5-2840-*) ;;
+                *) printf 'Unexpected activation link: %s\n' "$link" >&2; exit 6 ;;
+            esac
+        elif [ -e "$link" ]; then
+            printf 'Expected a symbolic activation link: %s\n' "$link" >&2
+            exit 6
+        fi
+    done
+
+    check_removal_state() {
+        for service in debian-router-pppoe.service debian-router-lan-dnsmasq.service; do
+            active=$(systemctl show --property=ActiveState --value -- "$service") || return 1
+            case "$active" in
+                inactive|failed) ;;
+                *) printf 'Move network service off the router before removal: %s\n' "$service" >&2; return 1 ;;
+            esac
+        done
+        for pending in /var/lib/debian-router-agent/wan-static/* \
+            /var/lib/debian-router-agent/wan-pppoe/* \
+            /var/lib/debian-router-agent/restore-journal.json \
+            /var/lib/debian-router-b5-2840/restore-pending.json; do
+            if [ -e "$pending" ] || [ -L "$pending" ]; then
+                echo 'Finish the pending network change or backup restore before removal.' >&2
+                return 1
+            fi
+        done
+    }
+
+    check_removal_state || exit 7
+    set --
+    for unit in debian-router-api.service debian-router-monitor.service \
+        debian-router-recovery.service debian-router-failover.service \
+        debian-router-mqtt.service debian-router-ddns.service debian-router-zapret.service \
+        debian-router-sing-box.service debian-router-pppoe.service \
+        debian-router-lan-dnsmasq.service debian-router-agent.service; do
+        file=$units_dir/$unit
+        fragment=$(systemctl show --property=FragmentPath --value -- "$unit")
+        if [ -L "$file" ] || { [ -e "$file" ] && [ ! -f "$file" ]; } ||
+            { [ -n "$fragment" ] && [ "$fragment" != "$file" ]; }; then
+            printf 'Unexpected unit location or type: %s\n' "$unit" >&2
+            exit 6
+        fi
+        if [ -f "$file" ] || [ "$fragment" = "$file" ]; then
+            set -- "$@" "$unit"
+        fi
+    done
+
+    api_running=no
+    if systemctl is-active --quiet debian-router-api.service; then
+        api_running=yes
+        systemctl stop debian-router-api.service
+    fi
+    # The API may have started a transaction before it stopped.
+    if ! check_removal_state; then
+        if [ "$api_running" = yes ]; then systemctl start debian-router-api.service; fi
+        exit 7
+    fi
+    if [ "$#" -gt 0 ]; then
+        systemctl stop -- "$@"
+        systemctl disable -- "$@"
+        for unit do rm -f -- "$units_dir/$unit"; done
+        systemctl daemon-reload
+    fi
+    rm -f -- "$prefix/current" "$prefix/agent-current"
+    echo 'Router application services removed. Configuration, releases and user data retained.'
+}
+
+if [ "$mode" = --uninstall ]; then
+    uninstall_router
+    exit 0
 fi
 
 if [ "$mode" != --check ]; then
